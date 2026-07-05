@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
     QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox, QSlider
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt
 
 # Add project root directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -28,6 +28,10 @@ class WorldsmithMainWindow(QMainWindow):
         self.db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "lore_forge_world.db"))
         self.ai_worker = None
         self.selected_cell_idx = None
+        
+        # 1. Custom Calendar settings (can be modified by user or database context)
+        self.custom_year_length = 420  # e.g., 420 days in custom year
+        self.custom_seasons = ["Sowing-Time", "High-Sun", "Gold-Leaf", "Deep-Frost"]
         
         # Initialize full Azgaar simulation logic including all parameters and layers
         self.map_engine = AzgaarEngine()
@@ -159,11 +163,11 @@ class WorldsmithMainWindow(QMainWindow):
         # Add Timeline Slider and Celestial Moon Previewer
         self.timeline_layout = QVBoxLayout()
         self.timeline_slider = QSlider(Qt.Orientation.Horizontal)
-        self.timeline_slider.setRange(1, 365)
+        self.timeline_slider.setRange(1, self.custom_year_length)
         self.timeline_slider.setValue(1)
         self.timeline_slider.valueChanged.connect(self.handle_timeline_changed)
         
-        self.lbl_timeline = QLabel("<b>Calendar Timeline (Day 1 / Spring)</b>")
+        self.lbl_timeline = QLabel(f"<b>Calendar Timeline (Day 1 / {self.custom_seasons[0]})</b>")
         self.celestial_widget = CelestialPreviewWidget(self)
         
         self.timeline_layout.addWidget(self.lbl_timeline)
@@ -208,15 +212,11 @@ class WorldsmithMainWindow(QMainWindow):
             pass
 
     def handle_timeline_changed(self, day_val):
-        # Calculate seasons based on a 365-day custom calendar
-        if day_val < 90:
-            season = "Spring"
-        elif day_val < 180:
-            season = "Summer"
-        elif day_val < 270:
-            season = "Autumn"
-        else:
-            season = "Winter"
+        # Calculate dynamic seasons division based on year length parameter
+        num_seasons = len(self.custom_seasons)
+        season_duration = self.custom_year_length / num_seasons
+        season_idx = min(int((day_val - 1) / season_duration), num_seasons - 1)
+        season = self.custom_seasons[season_idx]
             
         self.lbl_timeline.setText(f"<b>Calendar Timeline (Day {day_val} / {season})</b>")
         self.celestial_widget.set_day(day_val)
