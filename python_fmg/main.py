@@ -29,8 +29,8 @@ class WorldsmithMainWindow(QMainWindow):
         self.ai_worker = None
         self.selected_cell_idx = None
         
-        # 1. Custom Calendar settings (can be modified by user or database context)
-        self.custom_year_length = 420  # e.g., 420 days in custom year
+        # Calendar settings
+        self.custom_year_length = 420  
         self.custom_seasons = ["Sowing-Time", "High-Sun", "Gold-Leaf", "Deep-Frost"]
         
         # Initialize full Azgaar simulation logic including all parameters and layers
@@ -96,17 +96,28 @@ class WorldsmithMainWindow(QMainWindow):
         map_layout = QVBoxLayout(self.map_container)
         map_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Add Toolbar for Map Selection Layers
+        # Add Toolbar for Map Selection Layers and Magic Brush
         map_toolbar = QHBoxLayout()
         self.cb_layer = QComboBox()
-        self.cb_layer.addItems(["Elevation", "Biomes", "Political States"])
+        self.cb_layer.addItems(["Elevation", "Biomes", "Political States", "Magic Layer"])
         self.cb_layer.currentTextChanged.connect(self.change_map_layer)
+        
+        self.cb_magic_brush = QComboBox()
+        self.cb_magic_brush.addItems(["Wild Magic", "Abyssal Corruption", "Ley Line Node", "Aether Storm", "None"])
+        self.cb_magic_brush.currentTextChanged.connect(self.change_magic_brush)
+        self.cb_magic_brush.setVisible(False)  # Only visible when Magic Layer is active
+        
         map_toolbar.addWidget(QLabel("<b>Render Layer:</b>"))
         map_toolbar.addWidget(self.cb_layer)
+        self.lbl_magic_brush = QLabel("<b>Magic Type Brush:</b>")
+        self.lbl_magic_brush.setVisible(False)
+        map_toolbar.addWidget(self.lbl_magic_brush)
+        map_toolbar.addWidget(self.cb_magic_brush)
         map_toolbar.addStretch()
         
         self.map_viewer = MapViewerWidget(self)
         self.map_viewer.cell_hovered.connect(self.handle_cell_hovered)
+        self.map_viewer.cell_clicked.connect(self.handle_cell_painted)
         self.load_map_data_to_viewer()
         
         map_layout.addLayout(map_toolbar)
@@ -191,6 +202,7 @@ class WorldsmithMainWindow(QMainWindow):
 
         # Setup databases
         self.setup_markers_db()
+        self.setup_magic_db()
 
         # Welcome Prompt
         self.trigger_welcome_prompt()
@@ -211,8 +223,41 @@ class WorldsmithMainWindow(QMainWindow):
         except:
             pass
 
+    def setup_magic_db(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS magic_layers (
+                    cell_idx INTEGER PRIMARY KEY,
+                    magic_type TEXT NOT NULL
+                )
+            """)
+            conn.commit()
+            conn.close()
+        except:
+            pass
+
+    def change_magic_brush(self, brush_name):
+        self.map_viewer.active_paint_magic = brush_name
+
+    def handle_cell_painted(self, idx):
+        # Save painted magic type directly to SQLite
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO magic_layers (cell_idx, magic_type)
+                VALUES (?, ?)
+                ON CONFLICT(cell_idx) DO UPDATE SET magic_type=excluded.magic_type
+            """, (idx, self.map_viewer.active_paint_magic))
+            conn.commit()
+            conn.close()
+            self.statusBar.showMessage(f"Painted Cell {idx} with {self.map_viewer.active_paint_magic}.")
+        except Exception as e:
+            self.statusBar.showMessage(f"Failed to save magic cell: {e}")
+
     def handle_timeline_changed(self, day_val):
-        # Calculate dynamic seasons division based on year length parameter
         num_seasons = len(self.custom_seasons)
         season_duration = self.custom_year_length / num_seasons
         season_idx = min(int((day_val - 1) / season_duration), num_seasons - 1)
@@ -290,6 +335,20 @@ class WorldsmithMainWindow(QMainWindow):
             QMessageBox.critical(self, "Binding Error", f"Failed to bind note: {e}")
 
     def load_map_data_to_viewer(self):
+        # Read saved magic data first to fill viewer cache
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT cell_idx, magic_type FROM magic_layers")
+            for cell_idx, m_type in cursor.fetchall():
+                # Recover key (q, r)
+                for cell in self.map_viewer.grid_cells:
+                    if cell["idx"] == cell_idx:
+                        self.map_viewer.magic_data[(cell["q"], cell["r"])] = m_type
+            conn.close()
+        except:
+            pass
+
         for cell in self.map_engine.cells:
             q = cell["i"] * 100
             r = cell["i"] * 50 - cell["i"]
@@ -317,6 +376,12 @@ class WorldsmithMainWindow(QMainWindow):
 
     def change_map_layer(self, layer_name):
         self.map_viewer.layer_mode = layer_name
+        
+        # Show/Hide magic brush control depending on layer selection
+        is_magic = (layer_name == "Magic Layer")
+        self.lbl_magic_brush.setVisible(is_magic)
+        self.cb_magic_brush.setVisible(is_magic)
+        
         self.map_viewer.update()
 
     def handle_tag_found(self, tag_name):
