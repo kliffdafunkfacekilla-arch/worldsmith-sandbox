@@ -1,15 +1,19 @@
 import sys
 import random
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtCore import Qt, QRectF, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QBrush, QPen, QPolygonF
 from PyQt6.QtCore import QPointF
 
 class MapViewerWidget(QWidget):
+    cell_hovered = pyqtSignal(int, float, str, str) # cell_idx, elevation, biome, state_color
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent
         self.setMinimumSize(400, 400)
+        self.setMouseTracking(True)
+        
         self.elevation_data = {}  # (q, r): elevation
         self.biomes_data = {}     # (q, r): biome name
         self.factions_data = {}   # (q, r): faction color hex
@@ -21,10 +25,7 @@ class MapViewerWidget(QWidget):
     def generate_d20_grid(self):
         self.grid_cells = []
         import math
-        
-        # Center triangle points on the screen coordinates
         for face_idx in range(20):
-            # Calculate coordinates for 3 corners of the face triangle
             bx = 100 + (face_idx % 5) * 120 + (60 if (face_idx // 5) % 2 else 0)
             by = 80 + (face_idx // 5) * 110
             
@@ -32,7 +33,6 @@ class MapViewerWidget(QWidget):
             p2 = QPointF(bx + 100, by)
             p3 = QPointF(bx + 50, by + 90)
             
-            # Subdivide face to create minor hexagonal cells inside each face
             for i in range(12):
                 w1 = (i % 3 + 1) / 5.0
                 w2 = ((i // 3) % 4 + 1) / 6.0
@@ -45,31 +45,48 @@ class MapViewerWidget(QWidget):
                 r = face_idx * 50 - i
                 
                 self.grid_cells.append({
+                    "idx": face_idx * 12 + i,
                     "q": q, "r": r,
                     "x": cx, "y": cy,
                     "face": face_idx
                 })
+
+    def mouseMoveEvent(self, event):
+        pos = event.position()
+        # Find closest cell under cursor
+        import math
+        closest_cell = None
+        min_dist = 99999.0
+        for cell in self.grid_cells:
+            dist = math.sqrt((cell["x"] - pos.x())**2 + (cell["y"] - pos.y())**2)
+            if dist < min_dist and dist < 20: # 20px hover threshold radius
+                min_dist = dist
+                closest_cell = cell
+
+        if closest_cell:
+            q, r = closest_cell["q"], closest_cell["r"]
+            elev = self.elevation_data.get((q, r), 0.0)
+            biome = self.biomes_data.get((q, r), "Marine")
+            state = self.factions_data.get((q, r), "Neutral")
+            self.cell_hovered.emit(closest_cell["idx"], elev, biome, state)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         import math
         
-        # Draw background
         painter.fillRect(self.rect(), QBrush(QColor("#0d0d10")))
         
-        # Render cells
         for cell in self.grid_cells:
             q, r = cell["q"], cell["r"]
             cx, cy = cell["x"], cell["y"]
             
-            # Determine color based on active layer
             if self.layer_mode == "Elevation":
                 elev = self.elevation_data.get((q, r), 0)
                 if elev < 20:
-                    color = QColor(10, 30, int(80 + elev * 2))  # Ocean
+                    color = QColor(10, 30, int(80 + elev * 2))
                 else:
-                    color = QColor(int(20 + elev * 1.5), int(100 + elev), 20)  # Land
+                    color = QColor(int(20 + elev * 1.5), int(100 + elev), 20)
             elif self.layer_mode == "Biomes":
                 biome = self.biomes_data.get((q, r), "Marine")
                 if biome == "Marine":
@@ -83,7 +100,7 @@ class MapViewerWidget(QWidget):
                 elif biome == "Tundra":
                     color = QColor("#cbd5e1")
                 else:
-                    color = QColor("#15803d") # Grassland
+                    color = QColor("#15803d")
             elif self.layer_mode == "Political States":
                 color_hex = self.factions_data.get((q, r), "#18181b")
                 color = QColor(color_hex)
@@ -93,7 +110,6 @@ class MapViewerWidget(QWidget):
             painter.setBrush(QBrush(color))
             painter.setPen(QPen(QColor("#1e293b"), 1))
             
-            # Draw hexagon cell
             radius = 12
             poly = QPolygonF()
             for angle in range(0, 360, 60):
@@ -101,7 +117,7 @@ class MapViewerWidget(QWidget):
                 poly.append(QPointF(cx + radius * math.cos(rad), cy + radius * math.sin(rad)))
             painter.drawPolygon(poly)
 
-        # Draw Icosahedral Projection Grid boundaries overlay
+        # Draw boundaries
         painter.setPen(QPen(QColor("#04D361"), 1, Qt.PenStyle.DashLine))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         for face_idx in range(20):
@@ -113,7 +129,6 @@ class MapViewerWidget(QWidget):
             poly = QPolygonF([p1, p2, p3, p1])
             painter.drawPolygon(poly)
             
-            # Draw face label index
             painter.setPen(QColor("#4b5563"))
             painter.drawText(int(bx + 40), int(by + 40), str(face_idx))
             painter.setPen(QPen(QColor("#04D361"), 1, Qt.PenStyle.DashLine))

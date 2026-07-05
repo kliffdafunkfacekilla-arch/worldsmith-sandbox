@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
     QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 # Add project root directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -16,6 +16,7 @@ from python_fmg.core.ai_worker import OllamaPromptWorker
 from python_fmg.renderers.map_viewer import MapViewerWidget
 from python_fmg.renderers.notebook_editor import MarkdownNotebookEditor
 from python_fmg.core.azgaar_engine import AzgaarEngine
+from python_fmg.core.wiki_compiler import WikiCompiler
 
 class WorldsmithMainWindow(QMainWindow):
     def __init__(self):
@@ -25,12 +26,20 @@ class WorldsmithMainWindow(QMainWindow):
         
         self.db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "lore_forge_world.db"))
         self.ai_worker = None
+        
+        # Initialize full Azgaar simulation logic including all parameters and layers
         self.map_engine = AzgaarEngine()
         self.map_engine.run_heightmap_pipeline()
         self.map_engine.run_hydrology_rivers()
         self.map_engine.run_biomes_climate()
+        self.map_engine.run_cultures_generation()
         self.map_engine.run_states_expansion()
+        self.map_engine.run_provinces_generation()
+        self.map_engine.run_religions_generation()
         self.map_engine.run_burgs_generation()
+        self.map_engine.run_roads_pathfinding()
+        self.map_engine.run_military_generator()
+        self.map_engine.run_production_goods()
 
         # Modern Dark-Mode Stylesheet
         self.setStyleSheet("""
@@ -91,6 +100,7 @@ class WorldsmithMainWindow(QMainWindow):
         map_toolbar.addStretch()
         
         self.map_viewer = MapViewerWidget(self)
+        self.map_viewer.cell_hovered.connect(self.handle_cell_hovered)
         self.load_map_data_to_viewer()
         
         map_layout.addLayout(map_toolbar)
@@ -114,8 +124,12 @@ class WorldsmithMainWindow(QMainWindow):
         self.btn_save_note = QPushButton("💾 Save Note")
         self.btn_save_note.clicked.connect(self.save_current_note)
         self.btn_delete_note = QPushButton("🗑️ Delete")
+        self.btn_compile_wiki = QPushButton("🌐 Compile Wiki")
+        self.btn_compile_wiki.clicked.connect(self.compile_static_wiki)
+        
         self.note_action_layout.addWidget(self.btn_save_note)
         self.note_action_layout.addWidget(self.btn_delete_note)
+        self.note_action_layout.addWidget(self.btn_compile_wiki)
         
         note_layout.addWidget(QLabel("<b>Obsidian-Style Notebook</b>"))
         note_layout.addWidget(self.note_title_input)
@@ -154,19 +168,33 @@ class WorldsmithMainWindow(QMainWindow):
         # Welcome Prompt
         self.trigger_welcome_prompt()
 
+    def handle_cell_hovered(self, idx, elev, biome, state):
+        # Look up military troops and province, culture, religion, and roads details
+        troops = 0
+        for reg in self.map_engine.military_regiments:
+            if reg["cell_idx"] == idx:
+                troops = reg["total_troops"]
+                
+        # Find cell-level attributes
+        cell = self.map_engine.cells[idx]
+        province = f"Province {cell['province']}" if cell["province"] > 0 else "None"
+        culture = f"Culture {cell['culture']}" if cell["culture"] > 0 else "None"
+        religion = f"Religion {cell['religion']}" if cell["religion"] > 0 else "None"
+        
+        self.statusBar.showMessage(
+            f"Cell ID: {idx} | Elev: {elev}% | Biome: {biome} | State: {state} | "
+            f"Prov: {province} | Cult: {culture} | Rel: {religion} | Troops: {troops}"
+        )
+
     def load_map_data_to_viewer(self):
-        """
-        Pass generated cell coordinates, elevations, states, and biomes into viewer.
-        """
         for cell in self.map_engine.cells:
             q = cell["i"] * 100
             r = cell["i"] * 50 - cell["i"]
             self.map_viewer.elevation_data[(q, r)] = cell["h"]
             self.map_viewer.biomes_data[(q, r)] = cell["biome"]
             
-            # Map Political Factions
             if cell["state"] > 0:
-                color_hex = "#7f1d1d" # default red for faction
+                color_hex = "#7f1d1d"
                 for st in self.map_engine.states:
                     if st["id"] == cell["state"]:
                         color_hex = st["color"]
@@ -199,7 +227,6 @@ class WorldsmithMainWindow(QMainWindow):
             pass
 
     def handle_link_clicked(self, link_title):
-        # Retrieve existing linked note, or prep interface to create one
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -265,6 +292,14 @@ class WorldsmithMainWindow(QMainWindow):
             self.statusBar.showMessage(f"Note '{title}' saved successfully.")
         except Exception as e:
             QMessageBox.critical(self, "Database Error", f"Failed to save note: {e}")
+
+    def compile_static_wiki(self):
+        compiler = WikiCompiler(self.db_path)
+        success, msg = compiler.compile_wiki()
+        if success:
+            QMessageBox.information(self, "Wiki Compiled", msg)
+        else:
+            QMessageBox.critical(self, "Compilation Error", f"Failed to compile wiki: {msg}")
 
 def main():
     app = QApplication(sys.argv)
