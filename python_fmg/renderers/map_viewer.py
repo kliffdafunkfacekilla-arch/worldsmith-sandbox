@@ -6,7 +6,7 @@ from PyQt6.QtGui import QPainter, QColor, QBrush, QPen, QPolygonF
 from PyQt6.QtCore import QPointF
 
 class MapViewerWidget(QWidget):
-    cell_hovered = pyqtSignal(int, float, str, str) # cell_idx, elevation, biome, state_color
+    cell_hovered = pyqtSignal(int, float, str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -53,13 +53,12 @@ class MapViewerWidget(QWidget):
 
     def mouseMoveEvent(self, event):
         pos = event.position()
-        # Find closest cell under cursor
         import math
         closest_cell = None
         min_dist = 99999.0
         for cell in self.grid_cells:
             dist = math.sqrt((cell["x"] - pos.x())**2 + (cell["y"] - pos.y())**2)
-            if dist < min_dist and dist < 20: # 20px hover threshold radius
+            if dist < min_dist and dist < 20:
                 min_dist = dist
                 closest_cell = cell
 
@@ -84,13 +83,20 @@ class MapViewerWidget(QWidget):
             if self.layer_mode == "Elevation":
                 elev = self.elevation_data.get((q, r), 0)
                 if elev < 20:
-                    color = QColor(10, 30, int(80 + elev * 2))
+                    # Inverted Ocean Floor Rendering: Deepest trenches are rendered with intense volcanic heat, Benthics in Deep blue
+                    color = QColor(int((20 - elev) * 12), 30, int(80 + elev * 6))
                 else:
                     color = QColor(int(20 + elev * 1.5), int(100 + elev), 20)
             elif self.layer_mode == "Biomes":
                 biome = self.biomes_data.get((q, r), "Marine")
-                if biome == "Marine":
-                    color = QColor("#1e293b")
+                if biome == "Abyssal Trench (Desert)":
+                    color = QColor("#f43f5e") # Crimson for hot hydrothermal vents
+                elif biome == "Coral Forest (Rainforest)":
+                    color = QColor("#ec4899") # Pink for deep coral reef forest
+                elif biome == "Kelp Meadows (Grassland)":
+                    color = QColor("#0d9488") # Teal kelp grasslands
+                elif biome == "Benthic Shelf (Savanna)":
+                    color = QColor("#2563eb") # Royal blue shelf savanna
                 elif biome == "Hot Desert":
                     color = QColor("#eab308")
                 elif biome == "Montane / Glacier":

@@ -5,7 +5,7 @@ import json
 import urllib.request
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox
+    QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox, QSlider
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
@@ -17,15 +17,17 @@ from python_fmg.renderers.map_viewer import MapViewerWidget
 from python_fmg.renderers.notebook_editor import MarkdownNotebookEditor
 from python_fmg.core.azgaar_engine import AzgaarEngine
 from python_fmg.core.wiki_compiler import WikiCompiler
+from python_fmg.renderers.celestial_widget import CelestialPreviewWidget
 
 class WorldsmithMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Worldsmith Sandbox - Independent Worldbuilder")
-        self.resize(1400, 900)
+        self.resize(1400, 950)
         
         self.db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "lore_forge_world.db"))
         self.ai_worker = None
+        self.selected_cell_idx = None
         
         # Initialize full Azgaar simulation logic including all parameters and layers
         self.map_engine = AzgaarEngine()
@@ -115,7 +117,6 @@ class WorldsmithMainWindow(QMainWindow):
         self.note_title_input.setPlaceholderText("Note Title (e.g. Faction, Settlement, Region name)")
         self.note_title_input.setStyleSheet("font-size: 14px; font-weight: bold;")
         
-        # MarkdownNotebookEditor with tags and link signals
         self.note_editor = MarkdownNotebookEditor(self)
         self.note_editor.tag_detected.connect(self.handle_tag_found)
         self.note_editor.link_clicked.connect(self.handle_link_clicked)
@@ -126,8 +127,11 @@ class WorldsmithMainWindow(QMainWindow):
         self.btn_delete_note = QPushButton("🗑️ Delete")
         self.btn_compile_wiki = QPushButton("🌐 Compile Wiki")
         self.btn_compile_wiki.clicked.connect(self.compile_static_wiki)
+        self.btn_bind_map = QPushButton("📍 Bind to Cell")
+        self.btn_bind_map.clicked.connect(self.bind_note_to_map_cell)
         
         self.note_action_layout.addWidget(self.btn_save_note)
+        self.note_action_layout.addWidget(self.btn_bind_map)
         self.note_action_layout.addWidget(self.btn_delete_note)
         self.note_action_layout.addWidget(self.btn_compile_wiki)
         
@@ -152,10 +156,26 @@ class WorldsmithMainWindow(QMainWindow):
         self.btn_send_prompt = QPushButton("⚡ Send Response")
         self.btn_send_prompt.clicked.connect(self.send_ai_prompt)
         
+        # Add Timeline Slider and Celestial Moon Previewer
+        self.timeline_layout = QVBoxLayout()
+        self.timeline_slider = QSlider(Qt.Orientation.Horizontal)
+        self.timeline_slider.setRange(1, 365)
+        self.timeline_slider.setValue(1)
+        self.timeline_slider.valueChanged.connect(self.handle_timeline_changed)
+        
+        self.lbl_timeline = QLabel("<b>Calendar Timeline (Day 1 / Spring)</b>")
+        self.celestial_widget = CelestialPreviewWidget(self)
+        
+        self.timeline_layout.addWidget(self.lbl_timeline)
+        self.timeline_layout.addWidget(self.timeline_slider)
+        self.timeline_layout.addWidget(self.celestial_widget)
+        
         ai_layout.addWidget(QLabel("<b>Co-Author Assistant</b>"))
         ai_layout.addWidget(self.ai_prompt_history)
         ai_layout.addWidget(self.ai_input)
         ai_layout.addWidget(self.btn_send_prompt)
+        ai_layout.addLayout(self.timeline_layout)
+        
         self.main_splitter.addWidget(self.ai_container)
 
         # Set sizes (40% Map, 35% Note, 25% AI)
@@ -165,26 +185,109 @@ class WorldsmithMainWindow(QMainWindow):
         self.setStatusBar(self.statusBar)
         self.statusBar.showMessage("Worldsmith ready.")
 
+        # Setup databases
+        self.setup_markers_db()
+
         # Welcome Prompt
         self.trigger_welcome_prompt()
 
+    def setup_markers_db(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS note_map_bindings (
+                    note_id INTEGER,
+                    cell_idx INTEGER UNIQUE,
+                    FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
+                )
+            """)
+            conn.commit()
+            conn.close()
+        except:
+            pass
+
+    def handle_timeline_changed(self, day_val):
+        # Calculate seasons based on a 365-day custom calendar
+        if day_val < 90:
+            season = "Spring"
+        elif day_val < 180:
+            season = "Summer"
+        elif day_val < 270:
+            season = "Autumn"
+        else:
+            season = "Winter"
+            
+        self.lbl_timeline.setText(f"<b>Calendar Timeline (Day {day_val} / {season})</b>")
+        self.celestial_widget.set_day(day_val)
+
     def handle_cell_hovered(self, idx, elev, biome, state):
-        # Look up military troops and province, culture, religion, and roads details
+        self.selected_cell_idx = idx
+        
+        bound_note_title = "None"
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT notes.title FROM notes 
+                JOIN note_map_bindings ON notes.id = note_map_bindings.note_id 
+                WHERE note_map_bindings.cell_idx = ?
+            """, (idx,))
+            row = cursor.fetchone()
+            if row:
+                bound_note_title = row[0]
+            conn.close()
+        except:
+            pass
+
         troops = 0
         for reg in self.map_engine.military_regiments:
             if reg["cell_idx"] == idx:
                 troops = reg["total_troops"]
                 
-        # Find cell-level attributes
         cell = self.map_engine.cells[idx]
         province = f"Province {cell['province']}" if cell["province"] > 0 else "None"
         culture = f"Culture {cell['culture']}" if cell["culture"] > 0 else "None"
         religion = f"Religion {cell['religion']}" if cell["religion"] > 0 else "None"
         
         self.statusBar.showMessage(
-            f"Cell ID: {idx} | Elev: {elev}% | Biome: {biome} | State: {state} | "
+            f"Cell ID: {idx} | Bound Note: {bound_note_title} | State: {state} | "
             f"Prov: {province} | Cult: {culture} | Rel: {religion} | Troops: {troops}"
         )
+
+    def bind_note_to_map_cell(self):
+        title = self.note_title_input.text().strip()
+        if not title:
+            QMessageBox.warning(self, "No Note", "Save or open a note first before binding it to a map cell.")
+            return
+        if self.selected_cell_idx is None:
+            QMessageBox.warning(self, "No Cell Hovered", "Hover over a map cell coordinate before binding.")
+            return
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT id FROM notes WHERE title=?", (title,))
+            row = cursor.fetchone()
+            if not row:
+                self.save_current_note()
+                cursor.execute("SELECT id FROM notes WHERE title=?", (title,))
+                row = cursor.fetchone()
+            
+            note_id = row[0]
+            
+            cursor.execute("""
+                INSERT INTO note_map_bindings (note_id, cell_idx) 
+                VALUES (?, ?)
+                ON CONFLICT(cell_idx) DO UPDATE SET note_id=excluded.note_id
+            """, (note_id, self.selected_cell_idx))
+            
+            conn.commit()
+            conn.close()
+            self.statusBar.showMessage(f"Successfully bound note '{title}' to Cell ID: {self.selected_cell_idx}.")
+        except Exception as e:
+            QMessageBox.critical(self, "Binding Error", f"Failed to bind note: {e}")
 
     def load_map_data_to_viewer(self):
         for cell in self.map_engine.cells:
