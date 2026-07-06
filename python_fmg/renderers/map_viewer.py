@@ -20,6 +20,13 @@ class MapViewerWidget(QWidget):
         self.magic_data = {}       
         self.layer_mode = "Elevation"  
         self.active_paint_magic = "Wild Magic"  
+        self.brush_mode = "Inspect" # Modes: Inspect, Magic, Height, State, Province, Culture, Religion, Burg, River
+        self.paint_height_value = 50
+        self.paint_state_value = 1
+        self.paint_province_value = 1
+        self.paint_culture_value = 1
+        self.paint_religion_value = 1
+        self.paint_river_value = 1
 
     def mouseMoveEvent(self, event):
         pos = event.position()
@@ -40,10 +47,47 @@ class MapViewerWidget(QWidget):
         pos = event.position()
         closest_cell_idx = self.find_closest_cell(pos)
 
-        if closest_cell_idx is not None and self.layer_mode == "Magic Layer":
-            self.magic_data[closest_cell_idx] = self.active_paint_magic
+        if closest_cell_idx is not None:
+            if self.brush_mode == "Magic Paint":
+                self.magic_data[closest_cell_idx] = self.active_paint_magic
+                self.cell_clicked.emit(closest_cell_idx)
+            elif self.brush_mode == "Height Paint":
+                self.parent.map_engine.cells[closest_cell_idx]["h"] = self.paint_height_value
+                self.parent.map_engine.run_biomes_climate()
+                self.parent.map_engine.run_production_goods()
+                self.parent.load_map_data_to_viewer()
+            elif self.brush_mode == "State Paint":
+                self.parent.map_engine.cells[closest_cell_idx]["state"] = self.paint_state_value
+                self.parent.load_map_data_to_viewer()
+            elif self.brush_mode == "Province Paint":
+                self.parent.map_engine.cells[closest_cell_idx]["province"] = self.paint_province_value
+                self.parent.load_map_data_to_viewer()
+            elif self.brush_mode == "Culture Paint":
+                self.parent.map_engine.cells[closest_cell_idx]["culture"] = self.paint_culture_value
+                self.parent.load_map_data_to_viewer()
+            elif self.brush_mode == "Religion Paint":
+                self.parent.map_engine.cells[closest_cell_idx]["religion"] = self.paint_religion_value
+                self.parent.load_map_data_to_viewer()
+            elif self.brush_mode == "River Paint":
+                self.parent.map_engine.cells[closest_cell_idx]["r"] = self.paint_river_value
+                self.parent.load_map_data_to_viewer()
+            elif self.brush_mode == "Burg Paint":
+                # Toggle burg placement
+                cell = self.parent.map_engine.cells[closest_cell_idx]
+                if cell["burg"] == 0:
+                    burg_id = len(self.parent.map_engine.burgs) + 1
+                    cell["burg"] = burg_id
+                    self.parent.map_engine.burgs.append({
+                        "id": burg_id,
+                        "cell_idx": closest_cell_idx,
+                        "name": f"New Settlement {burg_id}",
+                        "population": 15
+                    })
+                else:
+                    self.parent.map_engine.burgs = [b for b in self.parent.map_engine.burgs if b["id"] != cell["burg"]]
+                    cell["burg"] = 0
+                self.parent.load_map_data_to_viewer()
             self.update()
-            self.cell_clicked.emit(closest_cell_idx)
 
     def find_closest_cell(self, pos):
         if not self.parent or not hasattr(self.parent, "map_engine"):
@@ -159,7 +203,6 @@ class MapViewerWidget(QWidget):
             painter.fillPath(path, QBrush(color))
             painter.strokePath(path, QPen(QColor("#1e293b"), 0.5))
 
-        # Render Flow Rivers overlay layer
         for cell in cells:
             if cell["r"] > 0:
                 painter.setPen(QPen(QColor("#3b82f6"), max(1, int(cell["fl"] / 80)), Qt.PenStyle.SolidLine))
@@ -168,7 +211,6 @@ class MapViewerWidget(QWidget):
                     if nc["r"] == cell["r"] and nc["h"] < cell["h"]:
                         painter.drawLine(QPointF(cell["x"], cell["y"]), QPointF(nc["x"], nc["y"]))
 
-        # Render Roads & Conduits trade route overlay lines
         for road in self.parent.map_engine.roads:
             path = road.get("path", [])
             if len(path) >= 2:
@@ -186,7 +228,6 @@ class MapViewerWidget(QWidget):
             p2 = vor_mesh.points[point_pair[1]]
             painter.drawLine(QPointF(float(p1[0]), float(p1[1])), QPointF(float(p2[0]), float(p2[1])))
             
-        # Draw military regiments overlay highlights
         for reg in self.parent.map_engine.military_regiments:
             cell_idx = reg["cell_idx"]
             for cell in cells:
@@ -194,3 +235,10 @@ class MapViewerWidget(QWidget):
                     painter.setBrush(QBrush(QColor("#ef4444") if "Guard" in reg["name"] else QColor("#eab308")))
                     painter.setPen(QPen(QColor("#ffffff"), 1))
                     painter.drawEllipse(QPointF(cell["x"], cell["y"]), 6, 6)
+
+        # Draw burg structures
+        for burg in self.parent.map_engine.burgs:
+            cell = cells[burg["cell_idx"]]
+            painter.setBrush(QBrush(QColor("#eab308")))
+            painter.setPen(QPen(QColor("#000000"), 1))
+            painter.drawRect(QRectF(cell["x"] - 4, cell["y"] - 4, 8, 8))

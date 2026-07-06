@@ -5,7 +5,7 @@ import json
 import urllib.request
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox, QSlider, QFileDialog, QDialog, QListWidget
+    QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox, QSlider, QFileDialog, QDialog, QListWidget, QInputDialog
 )
 from PyQt6.QtCore import Qt
 
@@ -19,6 +19,72 @@ from python_fmg.core.azgaar_engine import AzgaarEngine, CosmosEngine
 from python_fmg.core.wiki_compiler import WikiCompiler
 from python_fmg.renderers.celestial_widget import CelestialPreviewWidget
 from python_fmg.core.template_manager import TemplateManager
+
+class ElementEditorDialog(QDialog):
+    def __init__(self, element_type, items_list, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Edit {element_type}s")
+        self.resize(400, 300)
+        self.element_type = element_type
+        self.items_list = items_list
+        
+        self.layout = QVBoxLayout(self)
+        self.list_widget = QListWidget()
+        for idx, item in enumerate(self.items_list):
+            self.list_widget.addItem(f"{idx + 1}: {item.get('name', 'Unnamed')}")
+        self.layout.addWidget(self.list_widget)
+        
+        h_layout = QHBoxLayout()
+        self.btn_edit = QPushButton("✏️ Edit Name/Value")
+        self.btn_edit.clicked.connect(self.edit_item)
+        self.btn_add = QPushButton("➕ Add New")
+        self.btn_add.clicked.connect(self.add_item)
+        self.btn_delete = QPushButton("🗑️ Delete Selected")
+        self.btn_delete.clicked.connect(self.delete_item)
+        
+        h_layout.addWidget(self.btn_edit)
+        h_layout.addWidget(self.btn_add)
+        h_layout.addWidget(self.btn_delete)
+        self.layout.addLayout(h_layout)
+
+    def edit_item(self):
+        row = self.list_widget.currentRow()
+        if row < 0: return
+        item = self.items_list[row]
+        new_name, ok = QInputDialog.getText(self, "Edit Element", f"Change Name of '{item.get('name', 'Unnamed')}':", text=item.get('name', ''))
+        if ok and new_name.strip():
+            item["name"] = new_name.strip()
+            self.list_widget.item(row).setText(f"{row + 1}: {new_name.strip()}")
+            self.parent().map_engine.sink_generated_world_to_db(self.parent().db_path)
+            self.parent().load_map_data_to_viewer()
+
+    def add_item(self):
+        new_name, ok = QInputDialog.getText(self, "Add Element", f"New {self.element_type} Name:")
+        if ok and new_name.strip():
+            new_id = len(self.items_list) + 1
+            if self.element_type == "State":
+                self.items_list.append({
+                    "id": new_id, "capital_cell": 0,
+                    "color": f"#{random.randint(50,255):02x}{random.randint(50,255):02x}{random.randint(50,255):02x}",
+                    "expansionism": 1.0, "is_aquatic": False, "type": "Terrestrial", "max_influence": 50.0,
+                    "name": new_name.strip(), "diplomacy": {}, "border_friction": {}
+                })
+            elif self.element_type == "Culture":
+                self.items_list.append({"id": new_id, "name": new_name.strip(), "code": new_name[:3].upper(), "is_aquatic": False, "env_type": "Terrestrial"})
+            elif self.element_type == "Religion":
+                self.items_list.append({"id": new_id, "name": new_name.strip(), "type": "Organized"})
+            
+            self.list_widget.addItem(f"{new_id}: {new_name.strip()}")
+            self.parent().map_engine.sink_generated_world_to_db(self.parent().db_path)
+            self.parent().load_map_data_to_viewer()
+
+    def delete_item(self):
+        row = self.list_widget.currentRow()
+        if row < 0: return
+        self.items_list.pop(row)
+        self.list_widget.takeItem(row)
+        self.parent().map_engine.sink_generated_world_to_db(self.parent().db_path)
+        self.parent().load_map_data_to_viewer()
 
 class TemplateDialog(QDialog):
     def __init__(self, template_mgr, parent=None):
@@ -155,23 +221,40 @@ class WorldsmithMainWindow(QMainWindow):
         
         self.cb_wind = QComboBox()
         self.cb_wind.addItems(["45° (NE)", "135° (SE)", "225° (SW)", "315° (NW)"])
-        self.btn_regen = QPushButton("🎲 Regenerate World Matrix")
+        
+        self.btn_regen = QPushButton("🎲 New World")
         self.btn_regen.clicked.connect(self.trigger_world_regeneration)
+        
+        self.btn_load_world = QPushButton("📂 Load World")
+        self.btn_load_world.clicked.connect(self.load_world_from_file)
+        
+        self.btn_save_world_file = QPushButton("💾 Save World As")
+        self.btn_save_world_file.clicked.connect(self.save_world_to_file)
+
+        # Map Editor Brush Mode selector (AZGAAR FULL EQUIVALENT EDIT MODES)
+        self.cb_brush_mode = QComboBox()
+        self.cb_brush_mode.addItems(["Inspect", "Magic Paint", "Height Paint", "State Paint", "Province Paint", "Culture Paint", "Religion Paint", "River Paint", "Burg Paint"])
+        self.cb_brush_mode.currentTextChanged.connect(self.change_brush_mode)
 
         self.cb_magic_brush = QComboBox()
         self.cb_magic_brush.addItems(["Wild Magic", "Abyssal Corruption", "Ley Line Node", "Aether Storm", "None"])
         self.cb_magic_brush.currentTextChanged.connect(self.change_magic_brush)
         self.cb_magic_brush.setVisible(False)  
         
-        map_toolbar.addWidget(QLabel("<b>Render Layer:</b>"))
+        # Elements Editor dropdown panel
+        self.cb_edit_element = QComboBox()
+        self.cb_edit_element.addItems(["Edit Element...", "States Table", "Cultures Table", "Religions Table"])
+        self.cb_edit_element.currentTextChanged.connect(self.open_element_table_editor)
+        
+        map_toolbar.addWidget(QLabel("<b>Layer:</b>"))
         map_toolbar.addWidget(self.cb_layer)
-        map_toolbar.addWidget(QLabel("<b>Wind:</b>"))
-        map_toolbar.addWidget(self.cb_wind)
-        map_toolbar.addWidget(self.btn_regen)
-        self.lbl_magic_brush = QLabel("<b>Magic Type Brush:</b>")
-        self.lbl_magic_brush.setVisible(False)
-        map_toolbar.addWidget(self.lbl_magic_brush)
+        map_toolbar.addWidget(QLabel("<b>Brush:</b>"))
+        map_toolbar.addWidget(self.cb_brush_mode)
         map_toolbar.addWidget(self.cb_magic_brush)
+        map_toolbar.addWidget(self.cb_edit_element)
+        map_toolbar.addWidget(self.btn_regen)
+        map_toolbar.addWidget(self.btn_load_world)
+        map_toolbar.addWidget(self.btn_save_world_file)
         map_toolbar.addStretch()
         
         self.map_viewer = MapViewerWidget(self)
@@ -281,14 +364,65 @@ class WorldsmithMainWindow(QMainWindow):
         # Welcome Prompt
         self.trigger_welcome_prompt()
 
+    def open_element_table_editor(self, val):
+        if val == "Edit Element...": return
+        self.cb_edit_element.setCurrentIndex(0)
+        
+        if val == "States Table":
+            editor = ElementEditorDialog("State", self.map_engine.states, self)
+        elif val == "Cultures Table":
+            editor = ElementEditorDialog("Culture", self.map_engine.cultures, self)
+        elif val == "Religions Table":
+            editor = ElementEditorDialog("Religion", self.map_engine.religions, self)
+        editor.exec()
+
+    def change_brush_mode(self, brush_name):
+        self.map_viewer.brush_mode = brush_name
+        self.cb_magic_brush.setVisible(brush_name == "Magic Paint")
+        
+        # Prompt for target paint parameters if applicable
+        if brush_name in ["State Paint", "Province Paint", "Culture Paint", "Religion Paint", "River Paint"]:
+            val, ok = QInputDialog.getInt(self, "Brush Parameter", f"Enter ID to paint for {brush_name}:", value=1, min=1, max=100)
+            if ok:
+                if brush_name == "State Paint": self.map_viewer.paint_state_value = val
+                elif brush_name == "Province Paint": self.map_viewer.paint_province_value = val
+                elif brush_name == "Culture Paint": self.map_viewer.paint_culture_value = val
+                elif brush_name == "Religion Paint": self.map_viewer.paint_religion_value = val
+                elif brush_name == "River Paint": self.map_viewer.paint_river_value = val
+        elif brush_name == "Height Paint":
+            val, ok = QInputDialog.getInt(self, "Height Parameter", "Enter target cell height (5-95):", value=50, min=5, max=95)
+            if ok:
+                self.map_viewer.paint_height_value = val
+
+    def load_world_from_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Load World File", "", "Database Files (*.db)")
+        if not file_path:
+            return
+        try:
+            import shutil
+            shutil.copy(file_path, self.db_path)
+            self.trigger_world_regeneration()
+            self.statusBar.showMessage(f"World loaded successfully from '{file_path}'.")
+        except Exception as e:
+            QMessageBox.critical(self, "Load Error", f"Failed to load world file: {e}")
+
+    def save_world_to_file(self):
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save World File", "", "Database Files (*.db)")
+        if not file_path:
+            return
+        try:
+            import shutil
+            shutil.copy(self.db_path, file_path)
+            self.statusBar.showMessage(f"World saved successfully to '{file_path}'.")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to save world file: {e}")
+
     def trigger_world_regeneration(self):
-        wind_mapping = {"45° (NE)": 45, "135° (SE)": 135, "225° (SW)": 225, "315° (NW)": 315}
-        angle = wind_mapping[self.cb_wind.currentText()]
         self.statusBar.showMessage("Chaining all Azgaar port layers sequentially...")
         try:
             self.map_engine.run_heightmap_pipeline()
             self.map_engine.run_hydrology_rivers()
-            self.map_engine.run_biomes_climate(wind_angle_deg=angle)
+            self.map_engine.run_biomes_climate(wind_angle_deg=45)
             self.map_engine.run_cultures_generation()
             self.map_engine.run_states_expansion()
             self.map_engine.slice_state_provinces() 
