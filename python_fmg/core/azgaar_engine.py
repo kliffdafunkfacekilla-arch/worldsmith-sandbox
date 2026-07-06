@@ -10,7 +10,6 @@ class CosmosEngine:
     def __init__(self, year_length=420, seasons=None, moons=None):
         self.year_length = year_length
         self.seasons = seasons or ["Sowing-Time", "High-Sun", "Gold-Leaf", "Deep-Frost"]
-        # Allow fully customizable moons configuration
         self.moons = moons or [
             {"name": "Sari", "period": 14.0, "radius": 120},
             {"name": "Ostra", "period": 28.0, "radius": 240}
@@ -51,20 +50,12 @@ class CosmosEngine:
         return state
 
     def update_celestial_magic_flux(self, db_path, current_day):
-        """
-        Computes real-time orbital alignment properties and updates world parameters.
-        Adjusts magic multiplier based on alignment of all custom moons.
-        """
         if not self.moons:
             return 1.0
             
-        # Calculate phases of all custom moons
         phases = [(current_day % m["period"]) / m["period"] for m in self.moons]
-        
-        # Check alignment proximity of all configured moons
         is_aligned = False
         if len(phases) >= 2:
-            # Check if phases are close to being aligned (conjunction or opposition)
             p0 = phases[0]
             aligned_count = 1
             for p in phases[1:]:
@@ -182,15 +173,37 @@ class AzgaarEngine:
                 "culture": 0,
                 "burg": 0,
                 "pop": 1.0,
-                "good": 0,
+                "good": "None",
                 "is_aquatic": False
             })
 
     def run_heightmap_pipeline(self):
         center_x, center_y = self.width / 2.0, self.height / 2.0
+        max_dist = math.sqrt(center_x**2 + center_y**2)
+        
+        seed_x = random.uniform(100.0, 5000.0)
+        seed_y = random.uniform(100.0, 5000.0)
+        
         for cell in self.cells:
-            dist = math.sqrt((cell["x"] - center_x)**2 + (cell["y"] - center_y)**2)
-            cell["h"] = int(max(5, 95 - dist * 0.22 + random.randint(-5, 5)))
+            nx = (cell["x"] / self.width) + seed_x
+            ny = (cell["y"] / self.height) + seed_y
+            
+            val = 0.0
+            freq = 1.0
+            amp = 1.0
+            for _ in range(4): 
+                val += math.sin(nx * freq * 4.0) * math.cos(ny * freq * 4.0) * amp
+                freq *= 2.2
+                amp *= 0.5
+                
+            noise_factor = (val + 1.5) / 3.0 * 50.0
+            dist_to_core = math.sqrt((cell["x"] - center_x)**2 + (cell["y"] - center_y)**2)
+            island_mask = 1.0 - (dist_to_core / (max_dist * 0.75))
+            island_mask = max(0.0, min(1.0, island_mask))
+            
+            final_h = (noise_factor * 0.6) + (island_mask * 60.0)
+            clamped_h = int(max(5, min(98, final_h)))
+            cell["h"] = clamped_h
 
     def run_hydrology_rivers(self):
         for cell in self.cells:
@@ -260,32 +273,47 @@ class AzgaarEngine:
             else:
                 cell["temp"] -= abs(cell["h"]) * 0.05
                 
-            h = cell["h"]
-            if h < 20:
-                depth_intensity = 20 - h
-                cell["is_aquatic"] = True
-                if depth_intensity > 15:
-                    cell["biome"] = "Abyssal Trench (Desert)"
-                elif depth_intensity > 10:
-                    cell["biome"] = "Coral Forest (Rainforest)"
-                elif cell["prec"] > 30:
-                    cell["biome"] = "Kelp Meadows (Grassland)"
-                else:
-                    cell["biome"] = "Benthic Shelf (Savanna)"
+            self._assign_whittaker_biomes_for_cell(cell)
+
+    def _assign_whittaker_biomes_for_cell(self, cell):
+        h = cell["h"]
+        t = cell["temp"]
+        p = cell["prec"]
+        
+        if h < 20:
+            depth = 20 - h
+            cell["is_aquatic"] = True
+            if depth > 15:
+                cell["biome"] = "Abyssal Trench (Desert)"
+            elif depth > 10:
+                cell["biome"] = "Coral Forest (Rainforest)"
+            elif p > 40:
+                cell["biome"] = "Kelp Meadows (Grassland)"
             else:
-                if h > 85:
-                    cell["biome"] = "Montane / Glacier"
-                else:
-                    t = cell["temp"]
-                    p = cell["prec"]
-                    if t > 20 and p < 10:
-                        cell["biome"] = "Hot Desert"
-                    elif t < 5:
-                        cell["biome"] = "Tundra"
-                    elif t > 18 and p > 50:
-                        cell["biome"] = "Tropical Rainforest"
-                    else:
-                        cell["biome"] = "Grassland / Savanna"
+                cell["biome"] = "Benthic Shelf (Savanna)"
+            return
+            
+        if h > 80:
+            cell["biome"] = "Montane / Glacier"
+        elif t < -5:
+            cell["biome"] = "Ice Sheet / Perpetual Frost"
+        elif t < 2:
+            if p < 10:   cell["biome"] = "Cold Desert"
+            else:        cell["biome"] = "Tundra"
+        elif t < 10:
+            if p < 20:   cell["biome"] = "Subarctic Dry Steppe"
+            elif p < 60:  cell["biome"] = "Taiga / Boreal Forest"
+            else:        cell["biome"] = "Temperate Rainforest"
+        elif t < 20:
+            if p < 15:   cell["biome"] = "Cold Desert"
+            elif p < 35:  cell["biome"] = "Grassland / Prairie"
+            elif p < 75:  cell["biome"] = "Temperate Deciduous Forest"
+            else:        cell["biome"] = "Maritime Rainforest"
+        else:
+            if p < 15:   cell["biome"] = "Hot Desert"
+            elif p < 45:  cell["biome"] = "Tropical Savanna"
+            elif p < 80:  cell["biome"] = "Seasonal Tropical Forest"
+            else:        cell["biome"] = "Equatorial Rainforest"
 
     def run_cultures_generation(self):
         self.cultures = []
@@ -306,7 +334,7 @@ class AzgaarEngine:
             cell["culture"] = 0
             
         for idx, cult in enumerate(self.cultures):
-            seed_cell_id = idx * 30
+            seed_cell_id = idx * (len(self.cells) // len(self.cultures))
             self.cells[seed_cell_id]["culture"] = cult["id"]
             heapq.heappush(pq, (0.0, seed_cell_id, cult["id"], cult["env_type"]))
             
@@ -443,6 +471,47 @@ class AzgaarEngine:
                         neighbor_cell["province"] = curr_pid
                         queue.append((n_id, curr_pid))
 
+    def run_diplomacy_matrix_engine(self):
+        for st in self.states:
+            st["diplomacy"] = {}
+            st["border_friction"] = {}
+
+        for cell in self.cells:
+            sid = cell["state"]
+            if sid == 0: continue
+            
+            for n_id in self.get_neighbors(cell["i"]):
+                nsid = self.cells[n_id]["state"]
+                if nsid != 0 and nsid != sid:
+                    self.states[sid - 1]["border_friction"][nsid] = \
+                        self.states[sid - 1]["border_friction"].get(nsid, 0) + 1
+
+        for s1 in self.states:
+            for s2 in self.states:
+                if s1["id"] == s2["id"]: continue
+                
+                rel_score = 50.0
+                shared_edges = s1["border_friction"].get(s2["id"], 0)
+                if shared_edges > 0:
+                    rel_score -= (shared_edges * 3.0) * s1["expansionism"]
+                else:
+                    rel_score += 15.0
+                    
+                s1_cap_cult = self.cells[s1["capital_cell"]]["culture"]
+                s2_cap_cult = self.cells[s2["capital_cell"]]["culture"]
+                if s1_cap_cult == s2_cap_cult:
+                    rel_score += 20.0
+                    
+                if rel_score < 20.0:    status = "War"
+                elif rel_score < 45.0:  status = "Suspicion"
+                elif rel_score < 75.0:  status = "Peace"
+                else:                  status = "Alliance"
+                
+                s1["diplomacy"][s2["id"]] = {
+                    "score": round(rel_score, 1),
+                    "status": status
+                }
+
     def run_religions_generation(self):
         self.religions = []
         religions_names = ["The Old Ones", "The Solar Cult", "Convergenceism", "Trench Mother Sect"]
@@ -506,20 +575,71 @@ class AzgaarEngine:
                 })
 
     def find_astar_path(self, start_idx, end_idx):
-        pq = [(0, start_idx, [start_idx])]
+        start_cell = self.cells[start_idx]
+        end_cell = self.cells[end_idx]
+        
+        def heuristic(c1, c2):
+            return math.sqrt((c1["x"] - c2["x"])**2 + (c1["y"] - c2["y"])**2)
+            
+        pq = []
+        heapq.heappush(pq, (heuristic(start_cell, end_cell), start_idx, [start_idx]))
+        g_scores = {start_idx: 0.0}
         visited = set()
+        
         while pq:
-            cost, current, path = heapq.heappop(pq)
+            _, current, path = heapq.heappop(pq)
+            
             if current == end_idx:
                 return path
-            if current in visited:
-                continue
+                
+            if current in visited: continue
             visited.add(current)
-            for neighbor in self.get_neighbors(current):
-                if neighbor not in visited:
-                    step_cost = abs(self.cells[neighbor]["h"] - self.cells[current]["h"]) + 1
-                    heapq.heappush(pq, (cost + step_cost, neighbor, path + [neighbor]))
+            
+            curr_cell = self.cells[current]
+            for n_id in self.get_neighbors(current):
+                if n_id in visited: continue
+                n_cell = self.cells[n_id]
+                
+                dist_cost = heuristic(curr_cell, n_cell)
+                slope_penalty = abs(n_cell["h"] - curr_cell["h"]) * 2.0
+                
+                medium_penalty = 0.0
+                if (curr_cell["h"] >= 20 and n_cell["h"] < 20) or (curr_cell["h"] < 20 and n_cell["h"] >= 20):
+                    medium_penalty = 50.0 
+                    
+                tentative_g = g_scores[current] + dist_cost + slope_penalty + medium_penalty
+                
+                if tentative_g < g_scores.get(n_id, float('inf')):
+                    g_scores[n_id] = tentative_g
+                    f_score = tentative_g + heuristic(n_cell, end_cell)
+                    heapq.heappush(pq, (f_score, n_id, path + [n_id]))
+                    
         return []
+
+    def run_trade_and_market_simulation(self):
+        """
+        Calculates trade route volumes and town market pricing parameters.
+        Generates overland/marine trade flow volumes across road/conduit paths.
+        """
+        for burg in self.burgs:
+            burg["market_demand"] = {}
+            burg["trade_income"] = 0.0
+            cell = self.cells[burg["cell_idx"]]
+            burg["produces"] = cell["good"]
+
+        for road in self.roads:
+            b1 = next((b for b in self.burgs if b["id"] == road["from_burg"]), None)
+            b2 = next((b for b in self.burgs if b["id"] == road["to_burg"]), None)
+            
+            if b1 and b2:
+                volume = (b1["population"] * b2["population"]) / 10.0
+                road["trade_volume"] = round(volume, 1)
+                
+                if b1["produces"] != b2["produces"]:
+                    b1["market_demand"][b2["produces"]] = round(volume * 1.5, 1)
+                    b2["market_demand"][b1["produces"]] = round(volume * 1.5, 1)
+                    b1["trade_income"] += volume * 0.2
+                    b2["trade_income"] += volume * 0.2
 
     def run_military_generator(self):
         self.military_regiments = []
@@ -566,44 +686,47 @@ class AzgaarEngine:
                     regiment_id += 1
 
     def run_production_goods(self):
-        self.goods = []
-        for idx, cell in enumerate(self.cells):
+        """
+        Overrides basic integer indexing with explicit resource types 
+        tailored to terrestrial and deep-marine biomes.
+        """
+        goods_manifest = {
+            1: "Grain", 2: "Timber", 3: "Spices", 4: "Iron Ore", 
+            5: "Bioluminescent Kelp", 6: "Precious Metals", 7: "Abyssal Pearls"
+        }
+        
+        for cell in self.cells:
             h = cell["h"]
             biome = cell["biome"]
             
             if h < 20:
-                cell["good"] = 5
+                cell["good"] = goods_manifest[7] if h < 5 else goods_manifest[5]
             elif h > 75:
-                cell["good"] = 6
+                cell["good"] = goods_manifest[6] if h > 85 else goods_manifest[4]
             elif biome == "Tropical Rainforest":
-                cell["good"] = 3
+                cell["good"] = goods_manifest[3]
+            elif biome == "Hot Desert":
+                cell["good"] = "Salt"
             else:
-                cell["good"] = 1
+                cell["good"] = goods_manifest[1] if cell["fl"] > 20 else goods_manifest[2]
 
     def sink_generated_world_to_db(self, db_path):
-        """
-        Sinks the completely integrated world generation dictionary directly 
-        into your lore_forge_world.db SQLite tables.
-        """
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
         try:
-            # Wipe legacy structures to avoid integrity collisions
             cursor.execute("DELETE FROM magic_layers")
             cursor.execute("DELETE FROM cell_neighbors")
             cursor.execute("DELETE FROM cells")
             cursor.execute("DELETE FROM settlements")
             cursor.execute("DELETE FROM factions")
             
-            # Insert States / Factions
             for st in self.states:
                 cursor.execute("""
                     INSERT INTO factions (id, name, color, treasury, tech_level)
                     VALUES (?, ?, ?, 0.0, 1)
                 """, (st["id"], f"Empire of {st['capital_cell']}", st["color"]))
                 
-            # Insert Cell Topography & Connections
             for cell in self.cells:
                 cursor.execute("""
                     INSERT INTO cells (id, centroid_x, centroid_y, elevation, moisture, temperature, state_id, province_id, culture_id)
@@ -615,14 +738,12 @@ class AzgaarEngine:
                     cell["culture"] if cell["culture"] > 0 else None
                 ))
                 
-                # Insert neighbor list relationships
                 for n_id in self.get_neighbors(cell["i"]):
                     cursor.execute("""
                         INSERT OR IGNORE INTO cell_neighbors (cell_id, neighbor_id)
                         VALUES (?, ?)
                     """, (cell["i"], n_id))
                     
-            # Insert Burgs / Settlements
             for burg in self.burgs:
                 cursor.execute("""
                     INSERT INTO settlements (name, q, r, population, faction_id)

@@ -103,6 +103,7 @@ class WorldsmithMainWindow(QMainWindow):
         self.map_engine.run_cultures_generation()
         self.map_engine.run_states_expansion()
         self.map_engine.slice_state_provinces() 
+        self.map_engine.run_diplomacy_matrix_engine()
         self.map_engine.run_religions_generation()
         self.map_engine.run_burgs_generation()
         self.map_engine.run_roads_pathfinding()
@@ -167,7 +168,7 @@ class WorldsmithMainWindow(QMainWindow):
         # Add Toolbar for Map Selection Layers and Magic Brush
         map_toolbar = QHBoxLayout()
         self.cb_layer = QComboBox()
-        self.cb_layer.addItems(["Elevation", "Biomes", "Political States", "Provinces", "Cultures", "Magic Layer"])
+        self.cb_layer.addItems(["Elevation", "Biomes", "Political States", "Provinces", "Cultures", "Magic Layer", "Production Goods"])
         self.cb_layer.currentTextChanged.connect(self.change_map_layer)
         
         self.cb_magic_brush = QComboBox()

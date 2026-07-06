@@ -4,6 +4,61 @@ import urllib.request
 import sqlite3
 from PyQt6.QtCore import QThread, pyqtSignal
 
+class CommandInterceptor:
+    """
+    Parses command text patterns from chat inputs, directly updating SQLite 
+    or modifying map parameters before feeding queries to LLMs.
+    """
+    @staticmethod
+    def intercept_and_execute(user_input, db_path):
+        if not user_input.startswith("/"):
+            return None
+            
+        parts = user_input.strip().split()
+        cmd = parts[0].lower()
+        
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            # /war [faction1_id] [faction2_id]
+            if cmd == "/war" and len(parts) >= 3:
+                f1, f2 = int(parts[1]), int(parts[2])
+                cursor.execute("""
+                    INSERT INTO inconsistencies (source_type, description, status)
+                    VALUES (?, ?, ?)
+                """, ("War Declared", f"State {f1} has declared war against State {f2}!", "Active"))
+                conn.commit()
+                conn.close()
+                return f"[System Command] State {f1} declared war against State {f2}. Geopolitical parameters updated."
+                
+            # /place_burg [name] [cell_idx]
+            elif cmd == "/place_burg" and len(parts) >= 3:
+                name = parts[1]
+                cell_idx = int(parts[2])
+                cursor.execute("""
+                    INSERT INTO settlements (name, q, r, population, faction_id)
+                    VALUES (?, ?, 0, 5000, 1)
+                """, (name, cell_idx))
+                conn.commit()
+                conn.close()
+                return f"[System Command] Burg '{name}' procedurally placed at Cell Index {cell_idx}."
+                
+            # /settle [cell_idx] [state_id]
+            elif cmd == "/settle" and len(parts) >= 3:
+                cell_idx = int(parts[1])
+                state_id = int(parts[2])
+                cursor.execute("UPDATE cells SET state_id=? WHERE id=?", (state_id, cell_idx))
+                conn.commit()
+                conn.close()
+                return f"[System Command] Border claimed: Cell {cell_idx} is now assigned to State {state_id}."
+                
+            conn.close()
+        except Exception as e:
+            return f"[System Command Error] Command execution failed: {e}"
+            
+        return "[System Command Error] Unknown or malformed command pattern."
+
 class OllamaPromptWorker(QThread):
     response_received = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
@@ -14,10 +69,13 @@ class OllamaPromptWorker(QThread):
         self.db_path = db_path
         self.model = model
         
+        # Check for client text commands first before feeding to LLM
+        intercepted_response = CommandInterceptor.intercept_and_execute(prompt, db_path)
+        self.intercepted_text = intercepted_response
+        
         world_context = self.load_database_context()
         templates_context = self.load_templates_context()
 
-        # Upgraded system directive to enforce a proactive, conversational interview loop
         self.system_instruction = system_instruction or (
             "You are Worldsmith AI, an interactive co-author guiding a TTRPG worldbuilder. "
             "Do not just passively respond. You must actively interview the user via the chat panel, "
@@ -65,6 +123,11 @@ class OllamaPromptWorker(QThread):
             return "No active database context loaded."
 
     def run(self):
+        # Short-circuit thread if command was intercepted and executed locally
+        if self.intercepted_text:
+            self.response_received.emit(self.intercepted_text)
+            return
+            
         try:
             full_prompt = f"System: {self.system_instruction}\n\nUser: {self.prompt}"
             data = json.dumps({
@@ -107,7 +170,7 @@ class LoreAuditWorker(QThread):
                 SELECT c.elevation, c.biome, c.state_id, m.magic_type 
                 FROM note_map_bindings b
                 JOIN cells c ON b.cell_idx = c.id
-                LEFT JOIN magic_layer m ON c.id = m.cell_id
+                LEFT JOIN magic_layers m ON c.id = m.cell_idx
                 JOIN notes n ON b.note_id = n.id
                 WHERE n.title = ?
             """, (self.note_title,))

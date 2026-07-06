@@ -53,18 +53,42 @@ def init_database():
         )
     """)
 
-    # 5. The Unbound Magic Layer Map
+    # 5. Factions / Sovereign States Table
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS magic_layer (
-            cell_id INTEGER PRIMARY KEY,
-            magic_type TEXT NOT NULL,          -- 'Wild Magic', 'Abyssal Corruption', etc.
-            ley_line_density REAL DEFAULT 0.0, -- Power metric scale
-            flux_frequency REAL DEFAULT 1.0,   -- Interacts with calendar changes
-            FOREIGN KEY(cell_id) REFERENCES cells(id) ON DELETE CASCADE
+        CREATE TABLE IF NOT EXISTS factions (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            color TEXT,
+            treasury REAL,
+            tech_level INTEGER
         )
     """)
 
-    # 6. Cosmic Records Archive
+    # 6. Settlements Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settlements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            q INTEGER,
+            r INTEGER,
+            population INTEGER,
+            faction_id INTEGER,
+            FOREIGN KEY(faction_id) REFERENCES factions(id)
+        )
+    """)
+
+    # 7. The Unbound Magic Layers Map (Using Plural name for consistency)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS magic_layers (
+            cell_idx INTEGER PRIMARY KEY,
+            magic_type TEXT NOT NULL,          -- 'Wild Magic', 'Abyssal Corruption', etc.
+            ley_line_density REAL DEFAULT 0.0, -- Power metric scale
+            flux_frequency REAL DEFAULT 1.0,   -- Interacts with calendar changes
+            FOREIGN KEY(cell_idx) REFERENCES cells(id) ON DELETE CASCADE
+        )
+    """)
+
+    # 8. Cosmic Records Archive
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS world_cosmology (
             day_index INTEGER PRIMARY KEY,
@@ -74,7 +98,7 @@ def init_database():
         )
     """)
 
-    # 7. Inconsistencies Table
+    # 9. Inconsistencies Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS inconsistencies (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,7 +109,7 @@ def init_database():
         )
     """)
 
-    # 8. Customizable templates table
+    # 10. Customizable templates table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS world_templates (
             category TEXT PRIMARY KEY,

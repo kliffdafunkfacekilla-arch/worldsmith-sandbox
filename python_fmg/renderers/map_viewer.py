@@ -130,7 +130,6 @@ class MapViewerWidget(QWidget):
                 color = QColor(color_hex)
             elif self.layer_mode == "Cultures":
                 cid = cell.get("culture", 0)
-                # Assign simple colors for cultural drift layer
                 colors = ["#3b82f6", "#ef4444", "#10b981", "#f59e0b", "#6366f1", "#ec4899", "#8b5cf6"]
                 color_hex = colors[cid % len(colors)] if cid > 0 else "#27272a"
                 color = QColor(color_hex)
@@ -146,11 +145,39 @@ class MapViewerWidget(QWidget):
                     color = QColor("#eab308")
                 else:
                     color = QColor("#27272a")
+            elif self.layer_mode == "Production Goods":
+                good = cell.get("good", "None")
+                good_colors = {
+                    "Grain": "#f59e0b", "Timber": "#15803d", "Spices": "#ec4899",
+                    "Iron Ore": "#4b5563", "Bioluminescent Kelp": "#0d9488",
+                    "Precious Metals": "#eab308", "Abyssal Pearls": "#8b5cf6", "Salt": "#f1f5f9"
+                }
+                color = QColor(good_colors.get(good, "#27272a"))
             else:
                 color = QColor("#27272a")
 
             painter.fillPath(path, QBrush(color))
             painter.strokePath(path, QPen(QColor("#1e293b"), 0.5))
+
+        # Render Flow Rivers overlay layer
+        for cell in cells:
+            if cell["r"] > 0:
+                painter.setPen(QPen(QColor("#3b82f6"), max(1, int(cell["fl"] / 80)), Qt.PenStyle.SolidLine))
+                for n in self.parent.map_engine.get_neighbors(cell["i"]):
+                    nc = cells[n]
+                    if nc["r"] == cell["r"] and nc["h"] < cell["h"]:
+                        painter.drawLine(QPointF(cell["x"], cell["y"]), QPointF(nc["x"], nc["y"]))
+
+        # Render Roads & Conduits trade route overlay lines
+        for road in self.parent.map_engine.roads:
+            path = road.get("path", [])
+            if len(path) >= 2:
+                is_aquatic = (road["type"] == "Abyssal Conduit")
+                painter.setPen(QPen(QColor("#06b6d4") if is_aquatic else QColor("#d97706"), 2, Qt.PenStyle.DotLine if is_aquatic else Qt.PenStyle.SolidLine))
+                for step in range(len(path) - 1):
+                    c1 = cells[path[step]]
+                    c2 = cells[path[step+1]]
+                    painter.drawLine(QPointF(c1["x"], c1["y"]), QPointF(c2["x"], c2["y"]))
 
         painter.setPen(QPen(QColor("#04D361"), 1, Qt.PenStyle.DashLine))
         painter.setBrush(Qt.BrushStyle.NoBrush)
