@@ -97,24 +97,6 @@ class WorldsmithMainWindow(QMainWindow):
         
         # Initialize full Azgaar simulation logic including all parameters and layers
         self.map_engine = AzgaarEngine()
-        self.map_engine.run_heightmap_pipeline()
-        self.map_engine.run_hydrology_rivers()
-        self.map_engine.run_biomes_climate()
-        self.map_engine.run_cultures_generation()
-        self.map_engine.run_states_expansion()
-        self.map_engine.slice_state_provinces() 
-        self.map_engine.run_diplomacy_matrix_engine()
-        self.map_engine.run_religions_generation()
-        self.map_engine.run_burgs_generation()
-        self.map_engine.run_roads_pathfinding()
-        self.map_engine.run_military_generator()
-        self.map_engine.run_production_goods()
-
-        # Sink generation data immediately to SQLite on load
-        try:
-            self.map_engine.sink_generated_world_to_db(self.db_path)
-        except:
-            pass
 
         # Modern Dark-Mode Stylesheet
         self.setStyleSheet("""
@@ -171,6 +153,11 @@ class WorldsmithMainWindow(QMainWindow):
         self.cb_layer.addItems(["Elevation", "Biomes", "Political States", "Provinces", "Cultures", "Magic Layer", "Production Goods"])
         self.cb_layer.currentTextChanged.connect(self.change_map_layer)
         
+        self.cb_wind = QComboBox()
+        self.cb_wind.addItems(["45° (NE)", "135° (SE)", "225° (SW)", "315° (NW)"])
+        self.btn_regen = QPushButton("🎲 Regenerate World Matrix")
+        self.btn_regen.clicked.connect(self.trigger_world_regeneration)
+
         self.cb_magic_brush = QComboBox()
         self.cb_magic_brush.addItems(["Wild Magic", "Abyssal Corruption", "Ley Line Node", "Aether Storm", "None"])
         self.cb_magic_brush.currentTextChanged.connect(self.change_magic_brush)
@@ -178,6 +165,9 @@ class WorldsmithMainWindow(QMainWindow):
         
         map_toolbar.addWidget(QLabel("<b>Render Layer:</b>"))
         map_toolbar.addWidget(self.cb_layer)
+        map_toolbar.addWidget(QLabel("<b>Wind:</b>"))
+        map_toolbar.addWidget(self.cb_wind)
+        map_toolbar.addWidget(self.btn_regen)
         self.lbl_magic_brush = QLabel("<b>Magic Type Brush:</b>")
         self.lbl_magic_brush.setVisible(False)
         map_toolbar.addWidget(self.lbl_magic_brush)
@@ -187,7 +177,6 @@ class WorldsmithMainWindow(QMainWindow):
         self.map_viewer = MapViewerWidget(self)
         self.map_viewer.cell_hovered.connect(self.handle_cell_hovered)
         self.map_viewer.cell_clicked.connect(self.handle_cell_painted)
-        self.load_map_data_to_viewer()
         
         map_layout.addLayout(map_toolbar)
         map_layout.addWidget(self.map_viewer)
@@ -286,10 +275,35 @@ class WorldsmithMainWindow(QMainWindow):
         # Setup databases
         self.setup_markers_db()
         self.setup_magic_db()
+        self.trigger_world_regeneration()
         self.load_unresolved_inconsistencies()
 
         # Welcome Prompt
         self.trigger_welcome_prompt()
+
+    def trigger_world_regeneration(self):
+        wind_mapping = {"45° (NE)": 45, "135° (SE)": 135, "225° (SW)": 225, "315° (NW)": 315}
+        angle = wind_mapping[self.cb_wind.currentText()]
+        self.statusBar.showMessage("Chaining all Azgaar port layers sequentially...")
+        try:
+            self.map_engine.run_heightmap_pipeline()
+            self.map_engine.run_hydrology_rivers()
+            self.map_engine.run_biomes_climate(wind_angle_deg=angle)
+            self.map_engine.run_cultures_generation()
+            self.map_engine.run_states_expansion()
+            self.map_engine.slice_state_provinces() 
+            self.map_engine.run_diplomacy_matrix_engine()
+            self.map_engine.run_religions_generation()
+            self.map_engine.run_burgs_generation()
+            self.map_engine.run_roads_pathfinding()
+            self.map_engine.run_trade_and_market_simulation()
+            self.map_engine.run_military_generator()
+            self.map_engine.run_production_goods()
+            self.map_engine.sink_generated_world_to_db(self.db_path)
+            self.load_map_data_to_viewer()
+            self.statusBar.showMessage("World regeneration committed successfully.")
+        except Exception as e:
+            QMessageBox.critical(self, "Pipeline Failure", f"Failed generation sequence: {e}")
 
     def load_unresolved_inconsistencies(self):
         self.inconsistency_list.clear()
