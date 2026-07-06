@@ -14,16 +14,19 @@ class OllamaPromptWorker(QThread):
         self.db_path = db_path
         self.model = model
         
-        # Load active database context & custom templates for prompt injection
         world_context = self.load_database_context()
         templates_context = self.load_templates_context()
 
+        # Upgraded system directive to enforce a proactive, conversational interview loop
         self.system_instruction = system_instruction or (
-            "You are Worldsmith AI, an interactive co-author helping the user build a custom world. "
-            "Prompt the user with clear, open questions to fill in missing details. "
-            "Adhere strictly to the custom templates and categories defined by the user. "
-            f"Here are the active custom templates to fill in:\n{templates_context}\n\n"
-            f"Here is the active world data context:\n{world_context}"
+            "You are Worldsmith AI, an interactive co-author guiding a TTRPG worldbuilder. "
+            "Do not just passively respond. You must actively interview the user via the chat panel, "
+            "prompting them with clear, open-ended questions to flesh out missing details, "
+            "explore historical gaps, and resolve any contradictions between their text and map geography. "
+            "If the user makes a statement that fills in one of the templates, explicitly state how you "
+            "are updating that template.\n\n"
+            f"Active Templates to enforce:\n{templates_context}\n\n"
+            f"Active World Context:\n{world_context}"
         )
 
     def load_templates_context(self):
@@ -84,3 +87,75 @@ class OllamaPromptWorker(QThread):
 
         except Exception as e:
             self.error_occurred.emit(str(e))
+
+class LoreAuditWorker(QThread):
+    audit_completed = pyqtSignal(str)
+
+    def __init__(self, note_title, note_content, db_path="lore_forge_world.db", model="qwen2.5:latest"):
+        super().__init__()
+        self.note_title = note_title
+        self.note_content = note_content
+        self.db_path = db_path
+        self.model = model
+
+    def run(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT c.elevation, c.biome, c.state_id, m.magic_type 
+                FROM note_map_bindings b
+                JOIN cells c ON b.cell_idx = c.id
+                LEFT JOIN magic_layer m ON c.id = m.cell_id
+                JOIN notes n ON b.note_id = n.id
+                WHERE n.title = ?
+            """, (self.note_title,))
+            geo_context = cursor.fetchone()
+            conn.close()
+
+            system_prompt = (
+                "You are a strict TTRPG worldbuilding validator. Your job is to find structural "
+                "contradictions between user written text and established map data.\n\n"
+                "CRITICAL RULES:\n"
+                "- If the text contradicts the geography, log an inconsistency.\n"
+                "- If there are no inconsistencies, reply with only the word 'None'."
+            )
+            
+            user_prompt = f"Note Title: {self.note_title}\nContent: {self.note_content}\n"
+            if geo_context:
+                user_prompt += f"Map Context: Elevation={geo_context[0]}, Biome={geo_context[1]}, Controller State ID={geo_context[2]}, Magic Pollution={geo_context[3]}"
+            
+            full_prompt = f"System: {system_prompt}\n\nUser: {user_prompt}"
+            data = json.dumps({
+                "model": self.model,
+                "prompt": full_prompt,
+                "stream": False
+            }).encode("utf-8")
+
+            req = urllib.request.Request(
+                "http://localhost:11434/api/generate",
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+
+            with urllib.request.urlopen(req, timeout=30) as response:
+                resp_data = json.loads(response.read().decode("utf-8"))
+                result = resp_data.get("response", "").strip()
+                
+                if result.lower() != "none" and len(result) > 5:
+                    conn = sqlite3.connect(self.db_path)
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO inconsistencies (source_type, description, status)
+                        VALUES (?, ?, ?)
+                    """, ("Note Map Conflict", f"Note '{self.note_title}': {result}", "Active"))
+                    conn.commit()
+                    conn.close()
+                    
+                    self.audit_completed.emit(result)
+                else:
+                    self.audit_completed.emit("")
+        except Exception as e:
+            self.audit_completed.emit("")

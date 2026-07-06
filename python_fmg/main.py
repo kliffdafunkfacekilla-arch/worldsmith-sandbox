@@ -5,17 +5,17 @@ import json
 import urllib.request
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox, QSlider, QFileDialog, QDialog
+    QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox, QSlider, QFileDialog, QDialog, QListWidget
 )
 from PyQt6.QtCore import Qt
 
 # Add project root directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from python_fmg.core.ai_worker import OllamaPromptWorker
+from python_fmg.core.ai_worker import OllamaPromptWorker, LoreAuditWorker
 from python_fmg.renderers.map_viewer import MapViewerWidget
 from python_fmg.renderers.notebook_editor import MarkdownNotebookEditor
-from python_fmg.core.azgaar_engine import AzgaarEngine
+from python_fmg.core.azgaar_engine import AzgaarEngine, CosmosEngine
 from python_fmg.core.wiki_compiler import WikiCompiler
 from python_fmg.renderers.celestial_widget import CelestialPreviewWidget
 from python_fmg.core.template_manager import TemplateManager
@@ -37,7 +37,6 @@ class TemplateDialog(QDialog):
         self.txt_fields.setPlaceholderText("Enter template fields, one per line...")
         self.layout.addWidget(self.txt_fields)
         
-        # Actions for Custom Categories
         h_layout = QHBoxLayout()
         self.btn_new_cat = QPushButton("➕ Add Category")
         self.btn_new_cat.clicked.connect(self.add_new_category)
@@ -63,13 +62,11 @@ class TemplateDialog(QDialog):
         self.txt_fields.setPlainText("\n".join(fields))
 
     def add_new_category(self):
-        # Basic popup prompt to add custom category
         from PyQt6.QtWidgets import QInputDialog
         text, ok = QInputDialog.getText(self, "New Template Category", "Category Name:")
         if ok and text.strip():
             self.template_mgr.save_template(text.strip(), ["Default Field"])
             self.refresh_categories()
-            # Select new category
             self.cb_templates.setCurrentText(text.strip())
 
     def save_current_template(self):
@@ -88,6 +85,7 @@ class WorldsmithMainWindow(QMainWindow):
         
         self.db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "lore_forge_world.db"))
         self.ai_worker = None
+        self.audit_worker = None
         self.selected_cell_idx = None
         
         self.template_mgr = TemplateManager(self.db_path)
@@ -95,6 +93,7 @@ class WorldsmithMainWindow(QMainWindow):
         # Calendar settings
         self.custom_year_length = 420  
         self.custom_seasons = ["Sowing-Time", "High-Sun", "Gold-Leaf", "Deep-Frost"]
+        self.cosmos_engine = CosmosEngine(self.custom_year_length, self.custom_seasons)
         
         # Initialize full Azgaar simulation logic including all parameters and layers
         self.map_engine = AzgaarEngine()
@@ -103,12 +102,18 @@ class WorldsmithMainWindow(QMainWindow):
         self.map_engine.run_biomes_climate()
         self.map_engine.run_cultures_generation()
         self.map_engine.run_states_expansion()
-        self.map_engine.run_provinces_generation()
+        self.map_engine.slice_state_provinces() 
         self.map_engine.run_religions_generation()
         self.map_engine.run_burgs_generation()
         self.map_engine.run_roads_pathfinding()
         self.map_engine.run_military_generator()
         self.map_engine.run_production_goods()
+
+        # Sink generation data immediately to SQLite on load
+        try:
+            self.map_engine.sink_generated_world_to_db(self.db_path)
+        except:
+            pass
 
         # Modern Dark-Mode Stylesheet
         self.setStyleSheet("""
@@ -162,7 +167,7 @@ class WorldsmithMainWindow(QMainWindow):
         # Add Toolbar for Map Selection Layers and Magic Brush
         map_toolbar = QHBoxLayout()
         self.cb_layer = QComboBox()
-        self.cb_layer.addItems(["Elevation", "Biomes", "Political States", "Magic Layer"])
+        self.cb_layer.addItems(["Elevation", "Biomes", "Political States", "Provinces", "Cultures", "Magic Layer"])
         self.cb_layer.currentTextChanged.connect(self.change_map_layer)
         
         self.cb_magic_brush = QComboBox()
@@ -237,7 +242,6 @@ class WorldsmithMainWindow(QMainWindow):
         self.btn_send_prompt = QPushButton("⚡ Send Response")
         self.btn_send_prompt.clicked.connect(self.send_ai_prompt)
         
-        # New Settings/Template customize button
         self.btn_customize_templates = QPushButton("🛠️ Customize Templates")
         self.btn_customize_templates.clicked.connect(self.show_template_customizer)
         
@@ -251,6 +255,11 @@ class WorldsmithMainWindow(QMainWindow):
         self.lbl_timeline = QLabel(f"<b>Calendar Timeline (Day 1 / {self.custom_seasons[0]})</b>")
         self.celestial_widget = CelestialPreviewWidget(self)
         
+        # Inconsistency Feed Sidebar
+        self.inconsistency_list = QListWidget()
+        self.inconsistency_list.setStyleSheet("background-color: #2a1215; color: #f43f5e; border: 1px solid #b91c1c;")
+        self.inconsistency_list.itemDoubleClicked.connect(self.handle_inconsistency_double_clicked)
+        
         self.timeline_layout.addWidget(self.lbl_timeline)
         self.timeline_layout.addWidget(self.timeline_slider)
         self.timeline_layout.addWidget(self.celestial_widget)
@@ -260,6 +269,8 @@ class WorldsmithMainWindow(QMainWindow):
         ai_layout.addWidget(self.ai_prompt_history)
         ai_layout.addWidget(self.ai_input)
         ai_layout.addWidget(self.btn_send_prompt)
+        ai_layout.addWidget(QLabel("<b>🚨 Unresolved Lore Contradictions</b>"))
+        ai_layout.addWidget(self.inconsistency_list)
         ai_layout.addLayout(self.timeline_layout)
         
         self.main_splitter.addWidget(self.ai_container)
@@ -274,9 +285,25 @@ class WorldsmithMainWindow(QMainWindow):
         # Setup databases
         self.setup_markers_db()
         self.setup_magic_db()
+        self.load_unresolved_inconsistencies()
 
         # Welcome Prompt
         self.trigger_welcome_prompt()
+
+    def load_unresolved_inconsistencies(self):
+        self.inconsistency_list.clear()
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT description FROM inconsistencies WHERE status='Active'")
+            for row in cursor.fetchall():
+                self.inconsistency_list.addItem(row[0])
+            conn.close()
+        except:
+            pass
+
+    def handle_inconsistency_double_clicked(self, item):
+        self.ai_input.setText(f"Help me reconcile this lore error: {item.text()}")
 
     def show_template_customizer(self):
         dialog = TemplateDialog(self.template_mgr, self)
@@ -358,6 +385,11 @@ class WorldsmithMainWindow(QMainWindow):
             
         self.lbl_timeline.setText(f"<b>Calendar Timeline (Day {day_val} / {season})</b>")
         self.celestial_widget.set_day(day_val)
+        
+        # Trigger celestial alignment magic flux modifier calculations
+        flux_mod = self.cosmos_engine.update_celestial_magic_flux(self.db_path, day_val)
+        if flux_mod > 1.0:
+            self.statusBar.showMessage(f"Celestial Alignment Active! Magic power multiplier is surged x{flux_mod}.")
 
     def handle_cell_hovered(self, idx, elev, biome, state):
         self.selected_cell_idx = idx
@@ -433,27 +465,24 @@ class WorldsmithMainWindow(QMainWindow):
             cursor = conn.cursor()
             cursor.execute("SELECT cell_idx, magic_type FROM magic_layers")
             for cell_idx, m_type in cursor.fetchall():
-                for cell in self.map_viewer.grid_cells:
-                    if cell["idx"] == cell_idx:
-                        self.map_viewer.magic_data[(cell["q"], cell["r"])] = m_type
+                self.map_viewer.magic_data[cell_idx] = m_type
             conn.close()
         except:
             pass
 
         for cell in self.map_engine.cells:
-            q = cell["i"] * 100
-            r = cell["i"] * 50 - cell["i"]
-            self.map_viewer.elevation_data[(q, r)] = cell["h"]
-            self.map_viewer.biomes_data[(q, r)] = cell["biome"]
+            cell_idx = cell["i"]
+            self.map_viewer.elevation_data[cell_idx] = cell["h"]
+            self.map_viewer.biomes_data[cell_idx] = cell["biome"]
             
             if cell["state"] > 0:
                 color_hex = "#7f1d1d"
                 for st in self.map_engine.states:
                     if st["id"] == cell["state"]:
                         color_hex = st["color"]
-                self.map_viewer.factions_data[(q, r)] = color_hex
+                self.map_viewer.factions_data[cell_idx] = color_hex
             else:
-                self.map_viewer.factions_data[(q, r)] = "#18181b"
+                self.map_viewer.factions_data[cell_idx] = "#18181b"
         self.map_viewer.update()
 
     def trigger_welcome_prompt(self):
@@ -545,8 +574,28 @@ class WorldsmithMainWindow(QMainWindow):
             conn.commit()
             conn.close()
             self.statusBar.showMessage(f"Note '{title}' saved successfully.")
+            
+            # Trigger asynchronous background lore consistency audit on save
+            self.statusBar.showMessage(f"Note '{title}' saved. Running lore audit...")
+            self.audit_worker = LoreAuditWorker(title, content, db_path=self.db_path)
+            self.audit_worker.audit_completed.connect(self.handle_audit_completed)
+            self.audit_worker.start()
+            
         except Exception as e:
             QMessageBox.critical(self, "Database Error", f"Failed to save note: {e}")
+
+    def handle_audit_completed(self, contradiction_summary):
+        if contradiction_summary:
+            warning_text = (
+                f"<br><font color='#ef4444'><b>[Lore Audit Inconsistency Detected]:</b></font><br>"
+                f"<i>{contradiction_summary}</i><br>"
+                f"<font color='#a7f3d0'>This issue has been logged to your anomalies database dashboard.</font><br>"
+            )
+            self.ai_prompt_history.append(warning_text)
+            self.statusBar.showMessage("Inconsistency found and logged!")
+            self.load_unresolved_inconsistencies()
+        else:
+            self.statusBar.showMessage("Lore audit complete. No inconsistencies detected.")
 
     def compile_static_wiki(self):
         compiler = WikiCompiler(self.db_path)

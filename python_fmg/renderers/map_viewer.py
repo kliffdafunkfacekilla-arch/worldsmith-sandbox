@@ -1,13 +1,12 @@
 import sys
 import random
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtCore import Qt, QRectF, pyqtSignal
-from PyQt6.QtGui import QPainter, QColor, QBrush, QPen, QPolygonF
-from PyQt6.QtCore import QPointF
+from PyQt6.QtCore import Qt, QRectF, pyqtSignal, QPointF
+from PyQt6.QtGui import QPainter, QColor, QBrush, QPen, QPolygonF, QPainterPath
 
 class MapViewerWidget(QWidget):
     cell_hovered = pyqtSignal(int, float, str, str)
-    cell_clicked = pyqtSignal(int)  # Emit cell index on click for painting
+    cell_clicked = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -18,105 +17,89 @@ class MapViewerWidget(QWidget):
         self.elevation_data = {}  
         self.biomes_data = {}     
         self.factions_data = {}   
-        self.magic_data = {}       # (q, r): magic type string
-        self.layer_mode = "Elevation"  # "Elevation", "Biomes", "Political States", "Magic Layer"
-        self.active_paint_magic = "Wild Magic"  # Currently selected magic brush
-
-        self.grid_cells = []
-        self.generate_d20_grid()
-
-    def generate_d20_grid(self):
-        self.grid_cells = []
-        import math
-        for face_idx in range(20):
-            bx = 100 + (face_idx % 5) * 120 + (60 if (face_idx // 5) % 2 else 0)
-            by = 80 + (face_idx // 5) * 110
-            
-            p1 = QPointF(bx, by)
-            p2 = QPointF(bx + 100, by)
-            p3 = QPointF(bx + 50, by + 90)
-            
-            for i in range(12):
-                w1 = (i % 3 + 1) / 5.0
-                w2 = ((i // 3) % 4 + 1) / 6.0
-                w3 = 1.0 - w1 - w2
-                
-                cx = w1 * p1.x() + w2 * p2.x() + w3 * p3.x()
-                cy = w1 * p1.y() + w2 * p2.y() + w3 * p3.y()
-                
-                q = face_idx * 100 + i
-                r = face_idx * 50 - i
-                
-                self.grid_cells.append({
-                    "idx": face_idx * 12 + i,
-                    "q": q, "r": r,
-                    "x": cx, "y": cy,
-                    "face": face_idx
-                })
-                # Default magic data
-                self.magic_data[(q, r)] = "None"
+        self.magic_data = {}       
+        self.layer_mode = "Elevation"  
+        self.active_paint_magic = "Wild Magic"  
 
     def mouseMoveEvent(self, event):
         pos = event.position()
-        import math
-        closest_cell = None
-        min_dist = 99999.0
-        for cell in self.grid_cells:
-            dist = math.sqrt((cell["x"] - pos.x())**2 + (cell["y"] - pos.y())**2)
-            if dist < min_dist and dist < 20:
-                min_dist = dist
-                closest_cell = cell
+        closest_cell_idx = self.find_closest_cell(pos)
 
-        if closest_cell:
-            q, r = closest_cell["q"], closest_cell["r"]
-            elev = self.elevation_data.get((q, r), 0.0)
-            biome = self.biomes_data.get((q, r), "Marine")
-            state = self.factions_data.get((q, r), "Neutral")
+        if closest_cell_idx is not None:
+            elev = self.elevation_data.get(closest_cell_idx, 0.0)
+            biome = self.biomes_data.get(closest_cell_idx, "Marine")
+            state = self.factions_data.get(closest_cell_idx, "Neutral")
             
-            # Append active magic to status bar if hovering on Magic Layer
             if self.layer_mode == "Magic Layer":
-                mag = self.magic_data.get((q, r), "None")
+                mag = self.magic_data.get(closest_cell_idx, "None")
                 biome = f"{biome} (Magic: {mag})"
                 
-            self.cell_hovered.emit(closest_cell["idx"], elev, biome, state)
+            self.cell_hovered.emit(closest_cell_idx, elev, biome, state)
 
     def mousePressEvent(self, event):
-        # Support map painting on click
         pos = event.position()
-        import math
-        closest_cell = None
-        min_dist = 99999.0
-        for cell in self.grid_cells:
-            dist = math.sqrt((cell["x"] - pos.x())**2 + (cell["y"] - pos.y())**2)
-            if dist < min_dist and dist < 20:
-                min_dist = dist
-                closest_cell = cell
+        closest_cell_idx = self.find_closest_cell(pos)
 
-        if closest_cell and self.layer_mode == "Magic Layer":
-            q, r = closest_cell["q"], closest_cell["r"]
-            self.magic_data[(q, r)] = self.active_paint_magic
+        if closest_cell_idx is not None and self.layer_mode == "Magic Layer":
+            self.magic_data[closest_cell_idx] = self.active_paint_magic
             self.update()
-            self.cell_clicked.emit(closest_cell["idx"])
+            self.cell_clicked.emit(closest_cell_idx)
+
+    def find_closest_cell(self, pos):
+        if not self.parent or not hasattr(self.parent, "map_engine"):
+            return None
+        
+        import math
+        closest_idx = None
+        min_dist = 99999.0
+        
+        for cell in self.parent.map_engine.cells:
+            cx, cy = cell["x"], cell["y"]
+            dist = math.sqrt((cx - pos.x())**2 + (cy - pos.y())**2)
+            if dist < min_dist:
+                min_dist = dist
+                closest_idx = cell["i"]
+                
+        return closest_idx if min_dist < 40 else None
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        import math
-        
         painter.fillRect(self.rect(), QBrush(QColor("#0d0d10")))
         
-        for cell in self.grid_cells:
-            q, r = cell["q"], cell["r"]
-            cx, cy = cell["x"], cell["y"]
+        if not self.parent or not hasattr(self.parent, "map_engine"):
+            return
+            
+        vor_mesh = self.parent.map_engine.vor_mesh
+        cells = self.parent.map_engine.cells
+        provinces_pool = self.parent.map_engine.provinces_pool
+        cultures = self.parent.map_engine.cultures
+        
+        for cell in cells:
+            cell_id = cell["i"]
+            region_idx = vor_mesh.point_region[cell_id]
+            region = vor_mesh.regions[region_idx]
+            
+            if not region or -1 in region:
+                continue
+                
+            path = QPainterPath()
+            start_vert = vor_mesh.vertices[region[0]]
+            path.moveTo(QPointF(float(start_vert[0]), float(start_vert[1])))
+            
+            for vert_idx in region[1:]:
+                vert = vor_mesh.vertices[vert_idx]
+                path.lineTo(QPointF(float(vert[0]), float(vert[1])))
+            path.closeSubpath()
             
             if self.layer_mode == "Elevation":
-                elev = self.elevation_data.get((q, r), 0)
+                elev = self.elevation_data.get(cell_id, 0)
                 if elev < 20:
                     color = QColor(int((20 - elev) * 12), 30, int(80 + elev * 6))
                 else:
                     color = QColor(int(20 + elev * 1.5), int(100 + elev), 20)
             elif self.layer_mode == "Biomes":
-                biome = self.biomes_data.get((q, r), "Marine")
+                biome = self.biomes_data.get(cell_id, "Marine")
                 if biome == "Abyssal Trench (Desert)":
                     color = QColor("#f43f5e")
                 elif biome == "Coral Forest (Rainforest)":
@@ -136,46 +119,51 @@ class MapViewerWidget(QWidget):
                 else:
                     color = QColor("#15803d")
             elif self.layer_mode == "Political States":
-                color_hex = self.factions_data.get((q, r), "#18181b")
+                color_hex = self.factions_data.get(cell_id, "#18181b")
+                color = QColor(color_hex)
+            elif self.layer_mode == "Provinces":
+                pid = cell.get("province", 0)
+                if pid > 0 and pid in provinces_pool:
+                    color_hex = provinces_pool[pid]["color"]
+                else:
+                    color_hex = "#27272a"
+                color = QColor(color_hex)
+            elif self.layer_mode == "Cultures":
+                cid = cell.get("culture", 0)
+                # Assign simple colors for cultural drift layer
+                colors = ["#3b82f6", "#ef4444", "#10b981", "#f59e0b", "#6366f1", "#ec4899", "#8b5cf6"]
+                color_hex = colors[cid % len(colors)] if cid > 0 else "#27272a"
                 color = QColor(color_hex)
             elif self.layer_mode == "Magic Layer":
-                # Magic color palettes
-                mag = self.magic_data.get((q, r), "None")
+                mag = self.magic_data.get(cell_id, "None")
                 if mag == "Wild Magic":
-                    color = QColor("#a855f7") # Purple
+                    color = QColor("#a855f7")
                 elif mag == "Abyssal Corruption":
-                    color = QColor("#b91c1c") # Dark Red
+                    color = QColor("#b91c1c")
                 elif mag == "Ley Line Node":
-                    color = QColor("#06b6d4") # Cyan
+                    color = QColor("#06b6d4")
                 elif mag == "Aether Storm":
-                    color = QColor("#eab308") # Yellow
+                    color = QColor("#eab308")
                 else:
-                    color = QColor("#27272a") # Dark gray
+                    color = QColor("#27272a")
             else:
                 color = QColor("#27272a")
 
-            painter.setBrush(QBrush(color))
-            painter.setPen(QPen(QColor("#1e293b"), 1))
-            
-            radius = 12
-            poly = QPolygonF()
-            for angle in range(0, 360, 60):
-                rad = math.radians(angle)
-                poly.append(QPointF(cx + radius * math.cos(rad), cy + radius * math.sin(rad)))
-            painter.drawPolygon(poly)
+            painter.fillPath(path, QBrush(color))
+            painter.strokePath(path, QPen(QColor("#1e293b"), 0.5))
 
-        # Draw boundaries
         painter.setPen(QPen(QColor("#04D361"), 1, Qt.PenStyle.DashLine))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        for face_idx in range(20):
-            bx = 100 + (face_idx % 5) * 120 + (60 if (face_idx // 5) % 2 else 0)
-            by = 80 + (face_idx // 5) * 110
-            p1 = QPointF(bx, by)
-            p2 = QPointF(bx + 100, by)
-            p3 = QPointF(bx + 50, by + 90)
-            poly = QPolygonF([p1, p2, p3, p1])
-            painter.drawPolygon(poly)
+        for point_pair in vor_mesh.ridge_points:
+            p1 = vor_mesh.points[point_pair[0]]
+            p2 = vor_mesh.points[point_pair[1]]
+            painter.drawLine(QPointF(float(p1[0]), float(p1[1])), QPointF(float(p2[0]), float(p2[1])))
             
-            painter.setPen(QColor("#4b5563"))
-            painter.drawText(int(bx + 40), int(by + 40), str(face_idx))
-            painter.setPen(QPen(QColor("#04D361"), 1, Qt.PenStyle.DashLine))
+        # Draw military regiments overlay highlights
+        for reg in self.parent.map_engine.military_regiments:
+            cell_idx = reg["cell_idx"]
+            for cell in cells:
+                if cell["i"] == cell_idx:
+                    painter.setBrush(QBrush(QColor("#ef4444") if "Guard" in reg["name"] else QColor("#eab308")))
+                    painter.setPen(QPen(QColor("#ffffff"), 1))
+                    painter.drawEllipse(QPointF(cell["x"], cell["y"]), 6, 6)

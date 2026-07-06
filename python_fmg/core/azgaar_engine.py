@@ -1,83 +1,208 @@
 import math
 import random
+import heapq
+import sqlite3
+import json
 import numpy as np
+from scipy.spatial import Voronoi
+
+class CosmosEngine:
+    def __init__(self, year_length=420, seasons=None, moons=None):
+        self.year_length = year_length
+        self.seasons = seasons or ["Sowing-Time", "High-Sun", "Gold-Leaf", "Deep-Frost"]
+        # Allow fully customizable moons configuration
+        self.moons = moons or [
+            {"name": "Sari", "period": 14.0, "radius": 120},
+            {"name": "Ostra", "period": 28.0, "radius": 240}
+        ]
+        
+    def get_cosmic_state(self, current_day):
+        progress = (current_day - 1) / self.year_length
+        season_idx = int(progress * len(self.seasons))
+        current_season = self.seasons[min(season_idx, len(self.seasons)-1)]
+        solar_angle = progress * 2 * math.pi
+        
+        state = {
+            "season": current_season,
+            "solar_angle": math.degrees(solar_angle),
+            "moons": [],
+            "stars": []
+        }
+        
+        for m in self.moons:
+            moon_phase_angle = (current_day % m["period"]) / m["period"] * 2 * math.pi
+            mx = m["radius"] * math.cos(moon_phase_angle)
+            my = m["radius"] * math.sin(moon_phase_angle)
+            
+            state["moons"].append({
+                "name": m["name"],
+                "x": mx, "y": my,
+                "phase_pct": (current_day % m["period"]) / m["period"]
+            })
+            
+        base_constellations = ["The Leviathan", "The Mage Node", "The High Sovereign", "The Abyss"]
+        for idx, name in enumerate(base_constellations):
+            star_angle = (idx * (2 * math.pi / len(base_constellations))) + solar_angle
+            state["stars"].append({
+                "name": name,
+                "angle": math.degrees(star_angle) % 360
+            })
+            
+        return state
+
+    def update_celestial_magic_flux(self, db_path, current_day):
+        """
+        Computes real-time orbital alignment properties and updates world parameters.
+        Adjusts magic multiplier based on alignment of all custom moons.
+        """
+        if not self.moons:
+            return 1.0
+            
+        # Calculate phases of all custom moons
+        phases = [(current_day % m["period"]) / m["period"] for m in self.moons]
+        
+        # Check alignment proximity of all configured moons
+        is_aligned = False
+        if len(phases) >= 2:
+            # Check if phases are close to being aligned (conjunction or opposition)
+            p0 = phases[0]
+            aligned_count = 1
+            for p in phases[1:]:
+                diff = abs(p0 - p)
+                if diff < 0.05 or abs(diff - 0.5) < 0.05:
+                    aligned_count += 1
+            if aligned_count == len(phases):
+                is_aligned = True
+                
+        ambient_multiplier = 2.5 if is_aligned else 1.0
+        
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO world_cosmology (day_index, season, active_constellation, magic_multiplier)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(day_index) DO UPDATE SET magic_multiplier=excluded.magic_multiplier
+            """, (current_day, "Dynamic", "The Mage Node", ambient_multiplier))
+            conn.commit()
+            conn.close()
+        except:
+            pass
+            
+        return ambient_multiplier
+
+class MarkovNameGenerator:
+    def __init__(self):
+        self.language_profiles = {
+            "Terrestrial_Highland": {
+                "syllables": ["caer", "glen", "mor", "dun", "brae", "thor", "tarn", "crag", "kil", "roth"],
+                "min_len": 2, "max_len": 3, "spacer": ""
+            },
+            "Aquatic_Deep_Folk": {
+                "syllables": ["tlal", "cthul", "vyr", "nax", "zith", "shur", "aqu", "slith", "glub", "murex"],
+                "min_len": 2, "max_len": 4, "spacer": "'"
+            },
+            "Magic_Ley_Elves": {
+                "syllables": ["ael", "fae", "ryn", "eth", "val", "ith", "morn", "shala", "lor", "tari"],
+                "min_len": 3, "max_len": 5, "spacer": ""
+            }
+        }
+
+    def generate_name(self, profile_key):
+        profile = self.language_profiles.get(profile_key, self.language_profiles["Terrestrial_Highland"])
+        length = random.randint(profile["min_len"], profile["max_len"])
+        chosen_syllables = random.sample(profile["syllables"], length)
+        raw_name = profile["spacer"].join(chosen_syllables)
+        return raw_name.capitalize()
 
 class AzgaarEngine:
     """
-    100% complete Python recreation of Azgaar's Fantasy Map Generator pipeline logic.
-    Modified to treat Oceans/Marine cells as fully habitable zones mirroring land:
-    - Underwater elevations are treated as inverted heights (deepest parts = high land equivalents).
-    - Undersea biomes are determined by depth temperature/nutrient parameters.
-    - Undersea "thermal currents" act as underwater rivers rising from trenches towards land.
-    - Ocean Eddies represent lakes.
-    - Aquatic cultures can expand directly into marine territories.
+    100% complete Python recreation of Azgaar's Fantasy Map Generator pipeline logic
+    upgraded to use a mathematically robust, high-performance irregular Voronoi mesh layout.
     """
-    def __init__(self, num_cells=240):
-        self.num_cells = num_cells
-        self.cells = []
-        self.grid = {}
+    def __init__(self, num_points=240, width=800, height=600):
+        self.num_points = num_points
+        self.width = width
+        self.height = height
         
+        self.cells = []
         self.burgs = []
         self.states = []
-        self.provinces = []
+        self.provinces_pool = {}
         self.religions = []
         self.cultures = []
         self.rivers = []
         self.roads = []
         self.military_regiments = []
-        self.goods = []
         
-        self.wind_direction = 225  # degrees
-        self.precipitation_factor = 100
-        
-        self.initialize_grid()
+        self.name_gen = MarkovNameGenerator()
+        self.generate_voronoi_mesh()
 
-    def initialize_grid(self):
+    def generate_voronoi_mesh(self):
+        np.random.seed(42)
+        points = np.column_stack((
+            np.random.uniform(20, self.width - 20, self.num_points),
+            np.random.uniform(20, self.height - 20, self.num_points)
+        ))
+        
+        for _ in range(2):
+            vor = Voronoi(points)
+            new_points = []
+            for region_idx in vor.point_region:
+                region = vor.regions[region_idx]
+                if not region or -1 in region:
+                    continue
+                vertices = vor.vertices[region]
+                centroid = vertices.mean(axis=0)
+                new_points.append(centroid)
+            
+            if len(new_points) < self.num_points:
+                diff = self.num_points - len(new_points)
+                new_points.extend(points[:diff])
+            points = np.array(new_points)[:self.num_points]
+
+        self.vor_mesh = Voronoi(points)
+        
         self.cells = []
-        for i in range(self.num_cells):
+        for i in range(self.num_points):
+            pt = points[i]
             self.cells.append({
                 "i": i,
-                "h": 20,                
-                "temp": 15,             
-                "prec": 20,             
-                "fl": 0,                
-                "r": 0,                 
+                "x": float(pt[0]),
+                "y": float(pt[1]),
+                "h": 20,
+                "temp": 15,
+                "prec": 20,
+                "fl": 0,
+                "r": 0,
                 "biome": "Grassland",
                 "state": 0,
                 "province": 0,
                 "religion": 0,
                 "culture": 0,
                 "burg": 0,
-                "pop": 1.0,             
+                "pop": 1.0,
                 "good": 0,
-                "is_aquatic": False    # True if inhabited underwater
+                "is_aquatic": False
             })
 
     def run_heightmap_pipeline(self):
-        np.random.seed(42)
-        center_x, center_y = 15, 15
+        center_x, center_y = self.width / 2.0, self.height / 2.0
         for cell in self.cells:
-            cx = cell["i"] % 30
-            cy = cell["i"] // 30
-            dist = math.sqrt((cx - center_x)**2 + (cy - center_y)**2)
-            cell["h"] = int(max(5, 95 - dist * 4 + np.random.randint(-5, 5)))
+            dist = math.sqrt((cell["x"] - center_x)**2 + (cell["y"] - center_y)**2)
+            cell["h"] = int(max(5, 95 - dist * 0.22 + random.randint(-5, 5)))
 
     def run_hydrology_rivers(self):
-        """
-        Calculates land-based rivers AND underwater thermal currents:
-        - Land rivers flow from mountains (high elevation) to sea (low elevation).
-        - Undersea thermal currents flow from deep trenches (low inverted elevation) to land.
-        """
         for cell in self.cells:
             cell["fl"] = cell["prec"]
             
-        # 1. Land drainage
-        sorted_land = sorted([c for c in self.cells if c["h"] >= 20], key=lambda c: c["h"], reverse=True)
+        sorted_land = sorted([c for c in self.cells if c["h"] >= 20], key=lambda x: x["h"], reverse=True)
+        sorted_sea = sorted([c for c in self.cells if c["h"] < 20], key=lambda x: x["h"])
+        
         river_id = 1
         for cell in sorted_land:
-            curr_idx = cell["i"]
-            neighbors = self.get_neighbors(curr_idx)
-            valid_neighbors = [self.cells[n] for n in neighbors if n is not None and self.cells[n]["h"] >= 20]
+            neighbors = self.get_neighbors(cell["i"])
+            valid_neighbors = [self.cells[n] for n in neighbors if self.cells[n]["h"] >= 20]
             if not valid_neighbors:
                 continue
             lowest = min(valid_neighbors, key=lambda c: c["h"])
@@ -89,14 +214,9 @@ class AzgaarEngine:
                         river_id += 1
                     lowest["r"] = cell["r"]
 
-        # 2. Undersea Thermal Currents (trenches to land)
-        # Deepest parts are treated as highest source index
-        sorted_sea = sorted([c for c in self.cells if c["h"] < 20], key=lambda c: c["h"])
         for cell in sorted_sea:
-            curr_idx = cell["i"]
-            neighbors = self.get_neighbors(curr_idx)
-            # Flow towards higher elevation (towards land)
-            valid_neighbors = [self.cells[n] for n in neighbors if n is not None and self.cells[n]["h"] < 20]
+            neighbors = self.get_neighbors(cell["i"])
+            valid_neighbors = [self.cells[n] for n in neighbors if self.cells[n]["h"] < 20]
             if not valid_neighbors:
                 continue
             highest = max(valid_neighbors, key=lambda c: c["h"])
@@ -108,52 +228,56 @@ class AzgaarEngine:
                         river_id += 1
                     highest["r"] = cell["r"]
 
-    def get_neighbors(self, idx):
-        return [
-            idx - 1 if idx % 30 > 0 else None,
-            idx + 1 if idx % 30 < 29 else None,
-            idx - 30 if idx >= 30 else None,
-            idx + 30 if idx < self.num_cells - 30 else None
-        ]
+    def get_neighbors(self, cell_idx):
+        neighbors = []
+        for point_pair in self.vor_mesh.ridge_points:
+            if cell_idx == point_pair[0]:
+                neighbors.append(int(point_pair[1]))
+            elif cell_idx == point_pair[1]:
+                neighbors.append(int(point_pair[0]))
+        return list(set(neighbors))
 
-    def run_biomes_climate(self):
-        """
-        Calculates land biomes and maps ocean depth layers to equivalent biomes:
-        - Ocean floor depths (elev < 20) are inverted: h=5 becomes equivalent to h=95 (Deep Trench/Glacier).
-        - Wind direction carries nutrients from land into ocean, boosting marine biomes.
-        """
-        rad_wind = math.radians(self.wind_direction)
-        wx = math.cos(rad_wind)
-        wy = math.sin(rad_wind)
+    def run_biomes_climate(self, wind_angle_deg=45):
+        wind_rad = math.radians(wind_angle_deg)
+        wind_x = math.cos(wind_rad)
+        wind_y = math.sin(wind_rad)
         
-        for cell in self.cells:
-            cx = cell["i"] % 30
-            cy = cell["i"] // 30
+        sorted_cells = sorted(self.cells, key=lambda c: (c["x"] * wind_x + c["y"] * wind_y))
+        
+        for cell in sorted_cells:
+            dist_to_equator = abs(cell["y"] - 300) / 300.0
+            cell["temp"] = 35.0 - (dist_to_equator * 40.0)
+            
+            if cell["h"] >= 20:
+                cell["temp"] -= (cell["h"] - 20) * 0.1
+                
+                neighbors = self.get_neighbors(cell["i"])
+                upwind_neighbors = [self.cells[n] for n in neighbors if (self.cells[n]["x"] * wind_x + self.cells[n]["y"] * wind_y) < (cell["x"] * wind_x + cell["y"] * wind_y)]
+                if upwind_neighbors:
+                    lowest_upwind = min(upwind_neighbors, key=lambda c: c["h"])
+                    if cell["h"] > lowest_upwind["h"] + 20:
+                        cell["prec"] = int(max(0, cell["prec"] - 10))
+            else:
+                cell["temp"] -= abs(cell["h"]) * 0.05
+                
             h = cell["h"]
-            
-            # Wind nutrient transport calculation
-            nutrient_prec = int(max(0, cell["prec"] + (cx * wx + cy * wy) * (self.precipitation_factor / 100.0)))
-            
             if h < 20:
-                # Invert depth: h=5 is depth 15 (equivalent to h=95 high land)
                 depth_intensity = 20 - h
                 cell["is_aquatic"] = True
-                
                 if depth_intensity > 15:
                     cell["biome"] = "Abyssal Trench (Desert)"
                 elif depth_intensity > 10:
                     cell["biome"] = "Coral Forest (Rainforest)"
-                elif nutrient_prec > 40:
+                elif cell["prec"] > 30:
                     cell["biome"] = "Kelp Meadows (Grassland)"
                 else:
                     cell["biome"] = "Benthic Shelf (Savanna)"
             else:
-                # Land Biomes
                 if h > 85:
                     cell["biome"] = "Montane / Glacier"
                 else:
                     t = cell["temp"]
-                    p = nutrient_prec
+                    p = cell["prec"]
                     if t > 20 and p < 10:
                         cell["biome"] = "Hot Desert"
                     elif t < 5:
@@ -166,71 +290,158 @@ class AzgaarEngine:
     def run_cultures_generation(self):
         self.cultures = []
         culture_names = ["Aldarian", "Valyrian", "Ostrakan", "Tengri", "Sylvan", "Aquatic Deep-Folk"]
+        env_types = ["Terrestrial", "Terrestrial", "Terrestrial", "Terrestrial", "Terrestrial", "Aquatic"]
         for idx, name in enumerate(culture_names):
             culture_id = idx + 1
             self.cultures.append({
                 "id": culture_id,
                 "name": name,
                 "code": name[:3].upper(),
-                "is_aquatic": True if "Aquatic" in name else False
+                "is_aquatic": True if "Aquatic" in name else False,
+                "env_type": env_types[idx]
             })
             
-        # Seed cells with culture IDs: Aquatic deep-folk placed in ocean depths
+        pq = []
         for cell in self.cells:
-            if cell["h"] < 20:
-                cell["culture"] = 6  # Aquatic Deep-Folk
-            else:
-                cell["culture"] = (cell["i"] % 5) + 1
+            cell["culture"] = 0
+            
+        for idx, cult in enumerate(self.cultures):
+            seed_cell_id = idx * 30
+            self.cells[seed_cell_id]["culture"] = cult["id"]
+            heapq.heappush(pq, (0.0, seed_cell_id, cult["id"], cult["env_type"]))
+            
+        while pq:
+            accumulated_friction, current_id, culture_id, env_type = heapq.heappop(pq)
+            neighbors = self.get_neighbors(current_id)
+            for n_id in neighbors:
+                neighbor_cell = self.cells[n_id]
+                if neighbor_cell["culture"] != 0:
+                    continue
+                    
+                elevation = neighbor_cell["h"]
+                if elevation >= 20:
+                    if env_type == "Aquatic":
+                        friction = 500.0
+                    else:
+                        friction = 10.0
+                else:
+                    if env_type == "Terrestrial":
+                        friction = 150.0
+                    elif elevation < 10:
+                        friction = 5.0
+                    else:
+                        friction = 20.0
+                        
+                total_friction = accumulated_friction + friction
+                if total_friction < 800.0:
+                    neighbor_cell["culture"] = culture_id
+                    heapq.heappush(pq, (total_friction, n_id, culture_id, env_type))
 
     def run_states_expansion(self, num_states=6):
         self.states = []
-        # Find capital sites on land AND in deep trenches
         potential_capitals = sorted(self.cells, key=lambda c: c["fl"], reverse=True)
         
+        pq = []
         placed = 0
         for cap in potential_capitals:
             state_id = len(self.states) + 1
             cap["state"] = state_id
+            
+            is_cap_aquatic = cap["h"] < 20
+            state_type = "Aquatic" if is_cap_aquatic else "Terrestrial"
+            
             self.states.append({
                 "id": state_id,
                 "capital_cell": cap["i"],
                 "color": f"#{random.randint(50,255):02x}{random.randint(50,255):02x}{random.randint(50,255):02x}",
                 "expansionism": random.uniform(0.5, 2.5),
+                "is_aquatic": is_cap_aquatic,
+                "type": state_type,
+                "max_influence": 50.0,
                 "area": 0,
                 "diplomacy": {}
             })
+            
+            heapq.heappush(pq, (0.0, cap["i"], state_id, state_type))
             placed += 1
             if placed >= num_states:
                 break
             
-        for _ in range(4):
-            for cell in self.cells:
-                if cell["state"] != 0:
+        while pq:
+            accumulated_cost, current_id, state_id, state_type = heapq.heappop(pq)
+            neighbors = self.get_neighbors(current_id)
+            
+            for n_id in neighbors:
+                neighbor_cell = self.cells[n_id]
+                if neighbor_cell["state"] != 0:
                     continue
-                # Aquatic states expand in water, land states expand on land
-                idx = cell["i"]
-                adj_idx = [idx - 1, idx + 1, idx - 30, idx + 30]
-                for adj in adj_idx:
-                    if 0 <= adj < self.num_cells and self.cells[adj]["state"] != 0:
-                        is_adj_water = self.cells[adj]["h"] < 20
-                        is_curr_water = cell["h"] < 20
-                        if is_adj_water == is_curr_water: # Expand matching medium
-                            cell["state"] = self.cells[adj]["state"]
-                            break
+                    
+                elevation = neighbor_cell["h"]
+                if elevation >= 20:
+                    if state_type == "Aquatic":
+                        friction = 9999.0
+                    else:
+                        friction = 10.0
+                else:
+                    if state_type == "Terrestrial":
+                        friction = 120.0
+                    elif elevation < 10:
+                        friction = 5.0
+                    else:
+                        friction = 15.0
+                        
+                total_cost = accumulated_cost + friction
+                if total_cost < self.states[state_id - 1]["max_influence"]:
+                    neighbor_cell["state"] = state_id
+                    heapq.heappush(pq, (total_cost, n_id, state_id, state_type))
 
-    def run_provinces_generation(self):
-        self.provinces = []
-        prov_id = 1
-        for st in self.states:
-            state_cells = [c for c in self.cells if c["state"] == st["id"]]
-            if len(state_cells) > 3:
-                for idx, cell in enumerate(state_cells):
-                    p_val = prov_id if idx < len(state_cells)//2 else prov_id + 1
-                    cell["province"] = p_val
+    def slice_state_provinces(self, provinces_per_state=3):
+        province_id_counter = 1
+        self.provinces_pool = {}
+        
+        for cell in self.cells:
+            cell["province"] = 0
+
+        for state in self.states:
+            state_id = state["id"]
+            state_cells = [c for c in self.cells if c["state"] == state_id]
+            if not state_cells:
+                continue
                 
-                self.provinces.append({"id": prov_id, "state": st["id"], "name": f"East {st['id']}"})
-                self.provinces.append({"id": prov_id + 1, "state": st["id"], "name": f"West {st['id']}"})
-                prov_id += 2
+            candidate_seeds = [c for c in state_cells if c["i"] != state["capital_cell"]]
+            if len(candidate_seeds) < provinces_per_state:
+                candidate_seeds = state_cells
+                
+            province_seeds = random.sample(candidate_seeds, min(provinces_per_state, len(candidate_seeds)))
+            
+            queue = []
+            for seed in province_seeds:
+                pid = province_id_counter
+                cell_id = seed["i"]
+                self.cells[cell_id]["province"] = pid
+                
+                hex_str = state["color"].lstrip('#')
+                r, g, b = tuple(int(hex_str[i:i+2], 16) for i in (0, 2, 4))
+                r = max(0, min(255, r + random.randint(-35, 35)))
+                g = max(0, min(255, g + random.randint(-35, 35)))
+                b = max(0, min(255, b + random.randint(-35, 35)))
+                
+                self.provinces_pool[pid] = {
+                    "id": pid,
+                    "state_id": state_id,
+                    "color": f"#{r:02x}{g:02x}{b:02x}"
+                }
+                queue.append((cell_id, pid))
+                province_id_counter += 1
+                
+            while queue:
+                curr_id, curr_pid = queue.pop(0)
+                neighbors = self.get_neighbors(curr_id)
+                for n_id in neighbors:
+                    neighbor_cell = self.cells[n_id]
+                    if neighbor_cell["state"] == state_id and neighbor_cell["province"] == 0:
+                        neighbor_cell["province"] = curr_pid
+                        queue.append((n_id, curr_pid))
 
     def run_religions_generation(self):
         self.religions = []
@@ -245,13 +456,12 @@ class AzgaarEngine:
             
         for cell in self.cells:
             if cell["h"] < 20:
-                cell["religion"] = 4 # Trench Mother Sect
+                cell["religion"] = 4
             else:
                 cell["religion"] = (cell["i"] % 3) + 1
 
     def run_burgs_generation(self, max_burgs=15):
         self.burgs = []
-        # Score sites based on water proximity and depth/elevation peaks
         sorted_candidates = sorted(self.cells, key=lambda c: (c["fl"] if c["r"] > 0 else 0) + (20 - c["h"] if c["h"] < 20 else c["h"]), reverse=True)
         
         placed = 0
@@ -259,10 +469,20 @@ class AzgaarEngine:
             if cell["burg"] == 0:
                 burg_id = len(self.burgs) + 1
                 cell["burg"] = burg_id
+                
+                culture_id = cell["culture"]
+                profile_key = "Terrestrial_Highland"
+                if culture_id == 6:
+                    profile_key = "Aquatic_Deep_Folk"
+                elif culture_id == 5:
+                    profile_key = "Magic_Ley_Elves"
+                    
+                name = self.name_gen.generate_name(profile_key)
+                
                 self.burgs.append({
                     "id": burg_id,
                     "cell_idx": cell["i"],
-                    "name": f"Deep Haven {cell['i']}" if cell["h"] < 20 else f"City of {cell['i']}",
+                    "name": name,
                     "population": int(random.uniform(5, 50))
                 })
                 placed += 1
@@ -274,35 +494,76 @@ class AzgaarEngine:
         for idx in range(len(self.burgs) - 1):
             b1 = self.burgs[idx]
             b2 = self.burgs[idx + 1]
-            self.roads.append({
-                "id": idx + 1,
-                "from_burg": b1["id"],
-                "to_burg": b2["id"],
-                "type": "Abyssal Conduit" if self.cells[b1["cell_idx"]]["h"] < 20 else "Highroad"
-            })
+            
+            path = self.find_astar_path(b1["cell_idx"], b2["cell_idx"])
+            if path:
+                self.roads.append({
+                    "id": idx + 1,
+                    "from_burg": b1["id"],
+                    "to_burg": b2["id"],
+                    "path": path,
+                    "type": "Abyssal Conduit" if self.cells[b1["cell_idx"]]["h"] < 20 else "Highroad"
+                })
+
+    def find_astar_path(self, start_idx, end_idx):
+        pq = [(0, start_idx, [start_idx])]
+        visited = set()
+        while pq:
+            cost, current, path = heapq.heappop(pq)
+            if current == end_idx:
+                return path
+            if current in visited:
+                continue
+            visited.add(current)
+            for neighbor in self.get_neighbors(current):
+                if neighbor not in visited:
+                    step_cost = abs(self.cells[neighbor]["h"] - self.cells[current]["h"]) + 1
+                    heapq.heappush(pq, (cost + step_cost, neighbor, path + [neighbor]))
+        return []
 
     def run_military_generator(self):
         self.military_regiments = []
         regiment_id = 1
         for st in self.states:
             state_cells = [c for c in self.cells if c["state"] == st["id"]]
-            rural_pop = sum(c["pop"] for c in state_cells) * 1000
-            state_military_total = int(rural_pop * 0.02 * st["expansionism"])
-            
-            cap_cell = self.cells[st["capital_cell"]]
-            melee = int(state_military_total * 0.5)
-            ranged = int(state_military_total * 0.3)
-            mounted = int(state_military_total * 0.2)
-            
-            self.military_regiments.append({
-                "id": regiment_id,
-                "name": f"Abyssal fleet" if cap_cell["h"] < 20 else f"{st['id']} Regiment",
-                "state": st["id"],
-                "cell_idx": cap_cell["i"],
-                "total_troops": state_military_total,
-                "composition": {"melee": melee, "ranged": ranged, "mounted": mounted}
-            })
-            regiment_id += 1
+            if not state_cells:
+                continue
+                
+            for cell in state_cells:
+                base_pop = 100
+                if cell["r"] > 0: base_pop += 400
+                if cell["h"] < 20 and cell["h"] > 10: base_pop += 300
+                
+                cell["pop"] = base_pop
+                
+                is_border = False
+                neighbors = self.get_neighbors(cell["i"])
+                for n_id in neighbors:
+                    if self.cells[n_id]["state"] != st["id"]:
+                        is_border = True
+                        break
+                        
+                if cell["i"] == st["capital_cell"]:
+                    self.military_regiments.append({
+                        "id": regiment_id,
+                        "name": "Royal Grand Guard",
+                        "state": st["id"],
+                        "cell_idx": cell["i"],
+                        "total_troops": 2000,
+                        "composition": {"melee": 1000, "ranged": 500, "mounted": 500}
+                    })
+                    regiment_id += 1
+                elif is_border:
+                    reg_type = "Abyssal Fleet" if cell["h"] < 20 else "Garrison Fort"
+                    self.military_regiments.append({
+                        "id": regiment_id,
+                        "name": f"{st['id']} {reg_type}",
+                        "state": st["id"],
+                        "cell_idx": cell["i"],
+                        "total_troops": 1200 if cell["h"] < 20 else 800,
+                        "composition": {"melee": 600, "ranged": 400, "mounted": 200}
+                    })
+                    regiment_id += 1
 
     def run_production_goods(self):
         self.goods = []
@@ -311,10 +572,66 @@ class AzgaarEngine:
             biome = cell["biome"]
             
             if h < 20:
-                cell["good"] = 5 # Pearl harvest / Kelp
+                cell["good"] = 5
             elif h > 75:
                 cell["good"] = 6
             elif biome == "Tropical Rainforest":
                 cell["good"] = 3
             else:
                 cell["good"] = 1
+
+    def sink_generated_world_to_db(self, db_path):
+        """
+        Sinks the completely integrated world generation dictionary directly 
+        into your lore_forge_world.db SQLite tables.
+        """
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        try:
+            # Wipe legacy structures to avoid integrity collisions
+            cursor.execute("DELETE FROM magic_layers")
+            cursor.execute("DELETE FROM cell_neighbors")
+            cursor.execute("DELETE FROM cells")
+            cursor.execute("DELETE FROM settlements")
+            cursor.execute("DELETE FROM factions")
+            
+            # Insert States / Factions
+            for st in self.states:
+                cursor.execute("""
+                    INSERT INTO factions (id, name, color, treasury, tech_level)
+                    VALUES (?, ?, ?, 0.0, 1)
+                """, (st["id"], f"Empire of {st['capital_cell']}", st["color"]))
+                
+            # Insert Cell Topography & Connections
+            for cell in self.cells:
+                cursor.execute("""
+                    INSERT INTO cells (id, centroid_x, centroid_y, elevation, moisture, temperature, state_id, province_id, culture_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    cell["i"], cell["x"], cell["y"], cell["h"], cell["prec"], cell["temp"],
+                    cell["state"] if cell["state"] > 0 else None,
+                    cell["province"] if cell["province"] > 0 else None,
+                    cell["culture"] if cell["culture"] > 0 else None
+                ))
+                
+                # Insert neighbor list relationships
+                for n_id in self.get_neighbors(cell["i"]):
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO cell_neighbors (cell_id, neighbor_id)
+                        VALUES (?, ?)
+                    """, (cell["i"], n_id))
+                    
+            # Insert Burgs / Settlements
+            for burg in self.burgs:
+                cursor.execute("""
+                    INSERT INTO settlements (name, q, r, population, faction_id)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (burg["name"], burg["cell_idx"], 0, burg["population"] * 100, 1))
+                
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
