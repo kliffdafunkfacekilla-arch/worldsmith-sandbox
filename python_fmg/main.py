@@ -5,7 +5,7 @@ import json
 import urllib.request
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox, QSlider
+    QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox, QSlider, QFileDialog, QDialog
 )
 from PyQt6.QtCore import Qt
 
@@ -18,6 +18,67 @@ from python_fmg.renderers.notebook_editor import MarkdownNotebookEditor
 from python_fmg.core.azgaar_engine import AzgaarEngine
 from python_fmg.core.wiki_compiler import WikiCompiler
 from python_fmg.renderers.celestial_widget import CelestialPreviewWidget
+from python_fmg.core.template_manager import TemplateManager
+
+class TemplateDialog(QDialog):
+    def __init__(self, template_mgr, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Customize World Templates")
+        self.resize(500, 400)
+        self.template_mgr = template_mgr
+        
+        self.layout = QVBoxLayout(self)
+        self.layout.addWidget(QLabel("<b>Custom Worldbuilding Checklists & Templates:</b>"))
+        
+        self.cb_templates = QComboBox()
+        self.layout.addWidget(self.cb_templates)
+        
+        self.txt_fields = QTextEdit()
+        self.txt_fields.setPlaceholderText("Enter template fields, one per line...")
+        self.layout.addWidget(self.txt_fields)
+        
+        # Actions for Custom Categories
+        h_layout = QHBoxLayout()
+        self.btn_new_cat = QPushButton("➕ Add Category")
+        self.btn_new_cat.clicked.connect(self.add_new_category)
+        self.btn_save_template = QPushButton("💾 Save Template")
+        self.btn_save_template.clicked.connect(self.save_current_template)
+        
+        h_layout.addWidget(self.btn_new_cat)
+        h_layout.addWidget(self.btn_save_template)
+        self.layout.addLayout(h_layout)
+        
+        self.cb_templates.currentTextChanged.connect(self.load_selected_template)
+        self.refresh_categories()
+
+    def refresh_categories(self):
+        self.cb_templates.clear()
+        self.templates = self.template_mgr.get_all_templates()
+        self.cb_templates.addItems(list(self.templates.keys()))
+
+    def load_selected_template(self, category):
+        if not category or category not in self.templates:
+            return
+        fields = self.templates[category]
+        self.txt_fields.setPlainText("\n".join(fields))
+
+    def add_new_category(self):
+        # Basic popup prompt to add custom category
+        from PyQt6.QtWidgets import QInputDialog
+        text, ok = QInputDialog.getText(self, "New Template Category", "Category Name:")
+        if ok and text.strip():
+            self.template_mgr.save_template(text.strip(), ["Default Field"])
+            self.refresh_categories()
+            # Select new category
+            self.cb_templates.setCurrentText(text.strip())
+
+    def save_current_template(self):
+        category = self.cb_templates.currentText()
+        if not category:
+            return
+        fields = [f.strip() for f in self.txt_fields.toPlainText().split("\n") if f.strip()]
+        self.template_mgr.save_template(category, fields)
+        QMessageBox.information(self, "Success", f"Template '{category}' updated successfully.")
 
 class WorldsmithMainWindow(QMainWindow):
     def __init__(self):
@@ -28,6 +89,8 @@ class WorldsmithMainWindow(QMainWindow):
         self.db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "lore_forge_world.db"))
         self.ai_worker = None
         self.selected_cell_idx = None
+        
+        self.template_mgr = TemplateManager(self.db_path)
         
         # Calendar settings
         self.custom_year_length = 420  
@@ -105,7 +168,7 @@ class WorldsmithMainWindow(QMainWindow):
         self.cb_magic_brush = QComboBox()
         self.cb_magic_brush.addItems(["Wild Magic", "Abyssal Corruption", "Ley Line Node", "Aether Storm", "None"])
         self.cb_magic_brush.currentTextChanged.connect(self.change_magic_brush)
-        self.cb_magic_brush.setVisible(False)  # Only visible when Magic Layer is active
+        self.cb_magic_brush.setVisible(False)  
         
         map_toolbar.addWidget(QLabel("<b>Render Layer:</b>"))
         map_toolbar.addWidget(self.cb_layer)
@@ -144,9 +207,12 @@ class WorldsmithMainWindow(QMainWindow):
         self.btn_compile_wiki.clicked.connect(self.compile_static_wiki)
         self.btn_bind_map = QPushButton("📍 Bind to Cell")
         self.btn_bind_map.clicked.connect(self.bind_note_to_map_cell)
+        self.btn_import_note = QPushButton("📥 Import Note")
+        self.btn_import_note.clicked.connect(self.import_external_note)
         
         self.note_action_layout.addWidget(self.btn_save_note)
         self.note_action_layout.addWidget(self.btn_bind_map)
+        self.note_action_layout.addWidget(self.btn_import_note)
         self.note_action_layout.addWidget(self.btn_delete_note)
         self.note_action_layout.addWidget(self.btn_compile_wiki)
         
@@ -171,6 +237,10 @@ class WorldsmithMainWindow(QMainWindow):
         self.btn_send_prompt = QPushButton("⚡ Send Response")
         self.btn_send_prompt.clicked.connect(self.send_ai_prompt)
         
+        # New Settings/Template customize button
+        self.btn_customize_templates = QPushButton("🛠️ Customize Templates")
+        self.btn_customize_templates.clicked.connect(self.show_template_customizer)
+        
         # Add Timeline Slider and Celestial Moon Previewer
         self.timeline_layout = QVBoxLayout()
         self.timeline_slider = QSlider(Qt.Orientation.Horizontal)
@@ -186,6 +256,7 @@ class WorldsmithMainWindow(QMainWindow):
         self.timeline_layout.addWidget(self.celestial_widget)
         
         ai_layout.addWidget(QLabel("<b>Co-Author Assistant</b>"))
+        ai_layout.addWidget(self.btn_customize_templates)
         ai_layout.addWidget(self.ai_prompt_history)
         ai_layout.addWidget(self.ai_input)
         ai_layout.addWidget(self.btn_send_prompt)
@@ -206,6 +277,10 @@ class WorldsmithMainWindow(QMainWindow):
 
         # Welcome Prompt
         self.trigger_welcome_prompt()
+
+    def show_template_customizer(self):
+        dialog = TemplateDialog(self.template_mgr, self)
+        dialog.exec()
 
     def setup_markers_db(self):
         try:
@@ -238,11 +313,29 @@ class WorldsmithMainWindow(QMainWindow):
         except:
             pass
 
+    def import_external_note(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Import External Note", "", "Markdown Files (*.md);;Text Files (*.txt);;All Files (*)"
+        )
+        if not file_path:
+            return
+            
+        try:
+            title = os.path.splitext(os.path.basename(file_path))[0]
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                
+            self.note_title_input.setText(title)
+            self.note_editor.setPlainText(content)
+            self.save_current_note()
+            QMessageBox.information(self, "Import Successful", f"Note '{title}' imported and digested by Worldsmith AI.")
+        except Exception as e:
+            QMessageBox.critical(self, "Import Error", f"Failed to import file: {e}")
+
     def change_magic_brush(self, brush_name):
         self.map_viewer.active_paint_magic = brush_name
 
     def handle_cell_painted(self, idx):
-        # Save painted magic type directly to SQLite
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -335,13 +428,11 @@ class WorldsmithMainWindow(QMainWindow):
             QMessageBox.critical(self, "Binding Error", f"Failed to bind note: {e}")
 
     def load_map_data_to_viewer(self):
-        # Read saved magic data first to fill viewer cache
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute("SELECT cell_idx, magic_type FROM magic_layers")
             for cell_idx, m_type in cursor.fetchall():
-                # Recover key (q, r)
                 for cell in self.map_viewer.grid_cells:
                     if cell["idx"] == cell_idx:
                         self.map_viewer.magic_data[(cell["q"], cell["r"])] = m_type
@@ -369,19 +460,15 @@ class WorldsmithMainWindow(QMainWindow):
         welcome_text = (
             "<b>[System] Welcome to Worldsmith Sandbox!</b><br><br>"
             "I am your co-author AI. Let's start at the beginning. "
-            "What is the name of the fantasy world we are building today? "
-            "Provide a name, and briefly describe what kind of climate or geography it has."
+            "Tell me about the custom templates you've set up, or what kind of world rules we are building today."
         )
         self.ai_prompt_history.append(welcome_text)
 
     def change_map_layer(self, layer_name):
         self.map_viewer.layer_mode = layer_name
-        
-        # Show/Hide magic brush control depending on layer selection
         is_magic = (layer_name == "Magic Layer")
         self.lbl_magic_brush.setVisible(is_magic)
         self.cb_magic_brush.setVisible(is_magic)
-        
         self.map_viewer.update()
 
     def handle_tag_found(self, tag_name):

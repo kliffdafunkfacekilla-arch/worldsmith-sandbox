@@ -14,34 +14,45 @@ class OllamaPromptWorker(QThread):
         self.db_path = db_path
         self.model = model
         
-        # Load active database context (notes & map state) for the AI prompt
+        # Load active database context & custom templates for prompt injection
         world_context = self.load_database_context()
+        templates_context = self.load_templates_context()
 
         self.system_instruction = system_instruction or (
-            "You are Worldsmith AI, an interactive co-author helping the user build a fantasy world. "
-            "Prompt the user with clear, open questions to fill in missing details about name, history, "
-            "climate, factions, or geography. Never assume human presence; use animal-folk descriptors "
-            "(beast-folk, fox-kin, insectoid, etc.) if describing inhabitants. Keep suggestions strictly fantasy. "
+            "You are Worldsmith AI, an interactive co-author helping the user build a custom world. "
+            "Prompt the user with clear, open questions to fill in missing details. "
+            "Adhere strictly to the custom templates and categories defined by the user. "
+            f"Here are the active custom templates to fill in:\n{templates_context}\n\n"
             f"Here is the active world data context:\n{world_context}"
         )
 
+    def load_templates_context(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT category, fields_json FROM world_templates")
+            rows = cursor.fetchall()
+            conn.close()
+            
+            output = []
+            for row in rows:
+                fields = json.loads(row[1])
+                output.append(f"- Category '{row[0]}': requires fields: {', '.join(fields)}")
+            return "\n".join(output)
+        except:
+            return "No custom templates loaded."
+
     def load_database_context(self):
-        """
-        Pull metadata from SQLite to feed into the prompt window.
-        """
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # Fetch existing notes titles
             cursor.execute("SELECT title FROM notes LIMIT 10")
             notes = [row[0] for row in cursor.fetchall()]
             
-            # Fetch factions
             cursor.execute("SELECT name FROM factions LIMIT 5")
             factions = [row[0] for row in cursor.fetchall()]
             
-            # Fetch settlements count
             cursor.execute("SELECT COUNT(*) FROM settlements")
             settlements_count = cursor.fetchone()[0]
             
