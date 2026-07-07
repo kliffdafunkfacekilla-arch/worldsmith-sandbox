@@ -3,11 +3,13 @@ import sys
 import sqlite3
 import json
 import urllib.request
+import random
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox, QSlider, QFileDialog, QDialog, QListWidget, QInputDialog
+    QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox, QSlider, QFileDialog, QDialog, QListWidget, QInputDialog, QCheckBox
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QPointF
+from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont
 
 # Add project root directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -19,42 +21,155 @@ from python_fmg.core.azgaar_engine import AzgaarEngine, CosmosEngine
 from python_fmg.core.wiki_compiler import WikiCompiler
 from python_fmg.renderers.celestial_widget import CelestialPreviewWidget
 from python_fmg.core.template_manager import TemplateManager
+from python_fmg.core.emblem_generator import EmblemGenerator
+from python_fmg.core.burg_generator import BurgGenerator
+
+class BurgMapDialog(QDialog):
+    def __init__(self, burg, cell_elevation, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Settlement Layout - {burg['name']}")
+        self.resize(500, 500)
+        self.burg = burg
+        self.cell_elevation = cell_elevation
+        
+        self.burg_gen = BurgGenerator()
+        self.layout_data = self.burg_gen.generate_settlement_layout(
+            burg["cell_idx"], burg["population"], cell_elevation
+        )
+        
+        self.layout = QVBoxLayout(self)
+        self.lbl_info = QLabel(f"<b>{burg['name']}</b> (Pop: {burg['population']}k, Grid: {burg['cell_idx']})")
+        self.layout.addWidget(self.lbl_info)
+        
+        self.canvas = QWidget()
+        self.canvas.setMinimumSize(400, 400)
+        self.canvas.paintEvent = self.draw_map
+        self.layout.addWidget(self.canvas)
+
+    def draw_map(self, event):
+        painter = QPainter(self.canvas)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.canvas.rect(), QBrush(QColor("#1e1e24")))
+        
+        # Scale drawing coordinate vectors
+        scale_x = self.canvas.width() / 200.0
+        scale_y = self.canvas.height() / 200.0
+        
+        # Draw blocks
+        painter.setPen(QPen(QColor("#2d2d34"), 1))
+        painter.setBrush(QBrush(QColor("#7f1d1d") if self.cell_elevation < 20 else QColor("#d97706")))
+        for (bx, by, bw, bh) in self.layout_data["blocks"]:
+            painter.drawRect(
+                int(bx * scale_x), int(by * scale_y),
+                int(bw * scale_x), int(bh * scale_y)
+            )
+            
+        # Draw streets
+        painter.setPen(QPen(QColor("#ffffff") if self.cell_elevation < 20 else QColor("#eab308"), 3))
+        for (pt1, pt2) in self.layout_data["streets"]:
+            p1 = QPointF(pt1[0] * scale_x, pt1[1] * scale_y)
+            p2 = QPointF(pt2[0] * scale_x, pt2[1] * scale_y)
+            painter.drawLine(p1, p2)
+            
+        # Draw central plaza
+        painter.setPen(QPen(QColor("#000000"), 2))
+        painter.setBrush(QBrush(QColor("#a855f7")))
+        cx = self.layout_data["center"][0] * scale_x
+        cy = self.layout_data["center"][1] * scale_y
+        r = self.layout_data["plaza_radius"] * scale_x
+        painter.drawEllipse(QPointF(cx, cy), r, r)
 
 class ElementEditorDialog(QDialog):
     def __init__(self, element_type, items_list, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Edit {element_type}s")
-        self.resize(400, 300)
+        self.resize(550, 450)
         self.element_type = element_type
         self.items_list = items_list
         
         self.layout = QVBoxLayout(self)
         self.list_widget = QListWidget()
-        for idx, item in enumerate(self.items_list):
-            self.list_widget.addItem(f"{idx + 1}: {item.get('name', 'Unnamed')}")
+        self.refresh_list()
         self.layout.addWidget(self.list_widget)
         
         h_layout = QHBoxLayout()
-        self.btn_edit = QPushButton("✏️ Edit Name/Value")
+        self.btn_edit = QPushButton("✏️ Edit Attributes")
         self.btn_edit.clicked.connect(self.edit_item)
         self.btn_add = QPushButton("➕ Add New")
         self.btn_add.clicked.connect(self.add_item)
         self.btn_delete = QPushButton("🗑️ Delete Selected")
         self.btn_delete.clicked.connect(self.delete_item)
+        self.btn_paint = QPushButton("🎨 Paint Element")
+        self.btn_paint.clicked.connect(self.paint_item)
         
         h_layout.addWidget(self.btn_edit)
         h_layout.addWidget(self.btn_add)
         h_layout.addWidget(self.btn_delete)
+        h_layout.addWidget(self.btn_paint)
         self.layout.addLayout(h_layout)
+
+    def refresh_list(self):
+        self.list_widget.clear()
+        for idx, item in enumerate(self.items_list):
+            if self.element_type == "State":
+                gov = item.get("type", "Terrestrial")
+                cult = item.get("capital_cell", 0)
+                exp = item.get("expansionism", 1.0)
+                desc = f"{item.get('name', 'Unnamed')} (Gov: {gov}, Seed Cell: {cult}, Expansionism: {exp})"
+            elif self.element_type == "Culture":
+                env = item.get("env_type", "Terrestrial")
+                desc = f"{item.get('name', 'Unnamed')} (Code: {item.get('code', 'C').upper()}, Type: {env})"
+            elif self.element_type == "Religion":
+                rel_type = item.get("type", "Organized")
+                desc = f"{item.get('name', 'Unnamed')} (Type: {rel_type})"
+            else:
+                desc = f"{item.get('name', 'Unnamed')}"
+            self.list_widget.addItem(f"{idx + 1}: {desc}")
 
     def edit_item(self):
         row = self.list_widget.currentRow()
         if row < 0: return
         item = self.items_list[row]
-        new_name, ok = QInputDialog.getText(self, "Edit Element", f"Change Name of '{item.get('name', 'Unnamed')}':", text=item.get('name', ''))
-        if ok and new_name.strip():
+        
+        new_name, ok1 = QInputDialog.getText(self, "Edit Element Name", "Name:", text=item.get('name', ''))
+        if ok1 and new_name.strip():
             item["name"] = new_name.strip()
-            self.list_widget.item(row).setText(f"{row + 1}: {new_name.strip()}")
+            
+            if self.element_type == "State":
+                gov_types = ["Terrestrial", "Aquatic", "Nomadic", "Sylvan"]
+                new_gov, ok2 = QInputDialog.getItem(self, "Edit Government Type", "Government / Expansion Medium:", gov_types, gov_types.index(item.get("type", "Terrestrial")), False)
+                if ok2:
+                    item["type"] = new_gov
+                    
+                new_culture, ok3 = QInputDialog.getInt(self, "Edit Associated Culture ID", "Culture ID for Capital Cell:", value=item.get("capital_cell", 1), min=1, max=100)
+                if ok3:
+                    item["capital_cell"] = new_culture
+
+                new_exp, ok4 = QInputDialog.getDouble(self, "Edit Expansionism Modifier", "Expansion Speed Factor (0.1-5.0):", value=item.get("expansionism", 1.0), min=0.1, max=5.0, decimals=2)
+                if ok4:
+                    item["expansionism"] = new_exp
+
+                new_color, ok5 = QInputDialog.getText(self, "Edit Hex Color Code", "State Map Color Code:", text=item.get('color', '#ffffff'))
+                if ok5 and new_color.strip().startswith("#"):
+                    item["color"] = new_color.strip()
+
+            elif self.element_type == "Culture":
+                new_code, ok2 = QInputDialog.getText(self, "Edit Culture Code", "Abbreviation (Max 3 chars):", text=item.get('code', ''))
+                if ok2 and new_code.strip():
+                    item["code"] = new_code.strip().upper()
+
+                env_types = ["Terrestrial", "Aquatic", "Nomadic"]
+                new_env, ok3 = QInputDialog.getItem(self, "Edit Environmental Affinity", "Terrain Migration Type:", env_types, env_types.index(item.get("env_type", "Terrestrial")), False)
+                if ok3:
+                    item["env_type"] = new_env
+
+            elif self.element_type == "Religion":
+                rel_types = ["Organized", "Paganism", "Cult", "Monotheism"]
+                new_rel_type, ok2 = QInputDialog.getItem(self, "Edit Religion Type", "Category Type:", rel_types, rel_types.index(item.get("type", "Organized")), False)
+                if ok2:
+                    item["type"] = new_rel_type
+            
+            self.refresh_list()
             self.parent().map_engine.sink_generated_world_to_db(self.parent().db_path)
             self.parent().load_map_data_to_viewer()
 
@@ -64,7 +179,7 @@ class ElementEditorDialog(QDialog):
             new_id = len(self.items_list) + 1
             if self.element_type == "State":
                 self.items_list.append({
-                    "id": new_id, "capital_cell": 0,
+                    "id": new_id, "capital_cell": 1,
                     "color": f"#{random.randint(50,255):02x}{random.randint(50,255):02x}{random.randint(50,255):02x}",
                     "expansionism": 1.0, "is_aquatic": False, "type": "Terrestrial", "max_influence": 50.0,
                     "name": new_name.strip(), "diplomacy": {}, "border_friction": {}
@@ -74,7 +189,7 @@ class ElementEditorDialog(QDialog):
             elif self.element_type == "Religion":
                 self.items_list.append({"id": new_id, "name": new_name.strip(), "type": "Organized"})
             
-            self.list_widget.addItem(f"{new_id}: {new_name.strip()}")
+            self.refresh_list()
             self.parent().map_engine.sink_generated_world_to_db(self.parent().db_path)
             self.parent().load_map_data_to_viewer()
 
@@ -82,9 +197,27 @@ class ElementEditorDialog(QDialog):
         row = self.list_widget.currentRow()
         if row < 0: return
         self.items_list.pop(row)
-        self.list_widget.takeItem(row)
+        self.refresh_list()
         self.parent().map_engine.sink_generated_world_to_db(self.parent().db_path)
         self.parent().load_map_data_to_viewer()
+
+    def paint_item(self):
+        row = self.list_widget.currentRow()
+        if row < 0: return
+        item = self.items_list[row]
+        target_id = item.get("id", row + 1)
+        
+        # Set main brush config settings
+        if self.element_type == "State":
+            self.parent().cb_brush_mode.setCurrentText("State Paint")
+            self.parent().map_viewer.paint_state_value = target_id
+        elif self.element_type == "Culture":
+            self.parent().cb_brush_mode.setCurrentText("Culture Paint")
+            self.parent().map_viewer.paint_culture_value = target_id
+        elif self.element_type == "Religion":
+            self.parent().cb_brush_mode.setCurrentText("Religion Paint")
+            self.parent().map_viewer.paint_religion_value = target_id
+        self.close()
 
 class TemplateDialog(QDialog):
     def __init__(self, template_mgr, parent=None):
@@ -155,6 +288,7 @@ class WorldsmithMainWindow(QMainWindow):
         self.selected_cell_idx = None
         
         self.template_mgr = TemplateManager(self.db_path)
+        self.emblem_gen = EmblemGenerator()
         
         # Calendar settings
         self.custom_year_length = 420  
@@ -219,22 +353,20 @@ class WorldsmithMainWindow(QMainWindow):
         self.cb_layer.addItems(["Elevation", "Biomes", "Political States", "Provinces", "Cultures", "Magic Layer", "Production Goods"])
         self.cb_layer.currentTextChanged.connect(self.change_map_layer)
         
-        self.cb_wind = QComboBox()
-        self.cb_wind.addItems(["45° (NE)", "135° (SE)", "225° (SW)", "315° (NW)"])
-        
-        self.btn_regen = QPushButton("🎲 New World")
-        self.btn_regen.clicked.connect(self.trigger_world_regeneration)
-        
-        self.btn_load_world = QPushButton("📂 Load World")
-        self.btn_load_world.clicked.connect(self.load_world_from_file)
-        
-        self.btn_save_world_file = QPushButton("💾 Save World As")
-        self.btn_save_world_file.clicked.connect(self.save_world_to_file)
+        self.chk_layer_visibility = QCheckBox("Show Layer")
+        self.chk_layer_visibility.setChecked(True)
+        self.chk_layer_visibility.stateChanged.connect(self.toggle_layer_visibility)
 
         # Map Editor Brush Mode selector (AZGAAR FULL EQUIVALENT EDIT MODES)
         self.cb_brush_mode = QComboBox()
         self.cb_brush_mode.addItems(["Inspect", "Magic Paint", "Height Paint", "State Paint", "Province Paint", "Culture Paint", "Religion Paint", "River Paint", "Burg Paint"])
         self.cb_brush_mode.currentTextChanged.connect(self.change_brush_mode)
+
+        self.lbl_brush_size = QLabel("<b>Brush Radius:</b>")
+        self.slider_brush_size = QSlider(Qt.Orientation.Horizontal)
+        self.slider_brush_size.setRange(1, 4)
+        self.slider_brush_size.setValue(1)
+        self.slider_brush_size.valueChanged.connect(self.change_brush_size)
 
         self.cb_magic_brush = QComboBox()
         self.cb_magic_brush.addItems(["Wild Magic", "Abyssal Corruption", "Ley Line Node", "Aether Storm", "None"])
@@ -246,12 +378,30 @@ class WorldsmithMainWindow(QMainWindow):
         self.cb_edit_element.addItems(["Edit Element...", "States Table", "Cultures Table", "Religions Table"])
         self.cb_edit_element.currentTextChanged.connect(self.open_element_table_editor)
         
+        self.btn_regen = QPushButton("🎲 New World")
+        self.btn_regen.clicked.connect(self.trigger_world_regeneration)
+        
+        self.btn_load_world = QPushButton("📂 Load")
+        self.btn_load_world.clicked.connect(self.load_world_from_file)
+        
+        self.btn_save_world_file = QPushButton("💾 Save")
+        self.btn_save_world_file.clicked.connect(self.save_world_to_file)
+
+        # Explicit Tools Dropdown selector matching Azgaar
+        self.cb_tools = QComboBox()
+        self.cb_tools.addItems(["Tools", "Edit State", "Edit Culture", "Edit Religion", "Add Burg", "Delete Selected Element"])
+        self.cb_tools.currentTextChanged.connect(self.trigger_azgaar_tool_mode)
+
         map_toolbar.addWidget(QLabel("<b>Layer:</b>"))
         map_toolbar.addWidget(self.cb_layer)
+        map_toolbar.addWidget(self.chk_layer_visibility)
         map_toolbar.addWidget(QLabel("<b>Brush:</b>"))
         map_toolbar.addWidget(self.cb_brush_mode)
+        map_toolbar.addWidget(self.lbl_brush_size)
+        map_toolbar.addWidget(self.slider_brush_size)
         map_toolbar.addWidget(self.cb_magic_brush)
         map_toolbar.addWidget(self.cb_edit_element)
+        map_toolbar.addWidget(self.cb_tools)
         map_toolbar.addWidget(self.btn_regen)
         map_toolbar.addWidget(self.btn_load_world)
         map_toolbar.addWidget(self.btn_save_world_file)
@@ -363,6 +513,33 @@ class WorldsmithMainWindow(QMainWindow):
 
         # Welcome Prompt
         self.trigger_welcome_prompt()
+
+    def trigger_azgaar_tool_mode(self, tool_name):
+        if tool_name == "Tools": return
+        self.cb_tools.setCurrentIndex(0)
+        
+        if tool_name == "Edit State":
+            editor = ElementEditorDialog("State", self.map_engine.states, self)
+            editor.exec()
+        elif tool_name == "Edit Culture":
+            editor = ElementEditorDialog("Culture", self.map_engine.cultures, self)
+            editor.exec()
+        elif tool_name == "Edit Religion":
+            editor = ElementEditorDialog("Religion", self.map_engine.religions, self)
+            editor.exec()
+        elif tool_name == "Add Burg":
+            self.cb_brush_mode.setCurrentText("Burg Paint")
+            self.statusBar.showMessage("Click on a cell to add a new settlement burg.")
+        elif tool_name == "Delete Selected Element":
+            self.statusBar.showMessage("Delete items from Element editor dropdown tables directly.")
+
+    def toggle_layer_visibility(self, state):
+        layer_name = self.cb_layer.currentText()
+        self.map_viewer.visibility_map[layer_name] = (state == 2)
+        self.map_viewer.update()
+
+    def change_brush_size(self, val):
+        self.map_viewer.brush_size = val
 
     def open_element_table_editor(self, val):
         if val == "Edit Element...": return
@@ -573,6 +750,22 @@ class WorldsmithMainWindow(QMainWindow):
             f"Cell ID: {idx} | Bound Note: {bound_note_title} | State: {state} | "
             f"Prov: {province} | Cult: {culture} | Rel: {religion} | Troops: {troops}"
         )
+        
+        # Enable opening of settlement map editor if double-clicking a cell containing a burg
+        if cell["burg"] > 0:
+            self.statusBar.showMessage(
+                f"Settlement: {burg['name'] if 'burg' in locals() else 'Burg'} | "
+                f"Double-click to open street layout map."
+            )
+
+    def mouseDoubleClickEvent(self, event):
+        if self.selected_cell_idx is not None:
+            cell = self.map_engine.cells[self.selected_cell_idx]
+            if cell["burg"] > 0:
+                burg = next((b for b in self.map_engine.burgs if b["id"] == cell["burg"]), None)
+                if burg:
+                    dialog = BurgMapDialog(burg, cell["h"], self)
+                    dialog.exec()
 
     def bind_note_to_map_cell(self):
         title = self.note_title_input.text().strip()
@@ -645,8 +838,10 @@ class WorldsmithMainWindow(QMainWindow):
     def change_map_layer(self, layer_name):
         self.map_viewer.layer_mode = layer_name
         is_magic = (layer_name == "Magic Layer")
-        self.lbl_magic_brush.setVisible(is_magic)
         self.cb_magic_brush.setVisible(is_magic)
+        
+        # Load visibility checkbox
+        self.chk_layer_visibility.setChecked(self.map_viewer.visibility_map.get(layer_name, True))
         self.map_viewer.update()
 
     def handle_tag_found(self, tag_name):

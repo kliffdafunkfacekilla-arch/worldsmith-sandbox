@@ -83,28 +83,28 @@ class CosmosEngine:
         return ambient_multiplier
 
 class MarkovNameGenerator:
+    """
+    Advanced Markov-Chain nomenclature class driven by the 6 expanded Ostraka seed pools.
+    """
     def __init__(self):
-        self.language_profiles = {
-            "Terrestrial_Highland": {
-                "syllables": ["caer", "glen", "mor", "dun", "brae", "thor", "tarn", "crag", "kil", "roth"],
-                "min_len": 2, "max_len": 3, "spacer": ""
-            },
-            "Aquatic_Deep_Folk": {
-                "syllables": ["tlal", "cthul", "vyr", "nax", "zith", "shur", "aqu", "slith", "glub", "murex"],
-                "min_len": 2, "max_len": 4, "spacer": "'"
-            },
-            "Magic_Ley_Elves": {
-                "syllables": ["ael", "fae", "ryn", "eth", "val", "ith", "morn", "shala", "lor", "tari"],
-                "min_len": 3, "max_len": 5, "spacer": ""
-            }
+        self.configs = {
+            "Ostraka Mammalian": ["Snowpeak", "Viomuth", "Stagus", "Koda", "Daniaz", "Bramun", "Grooth", "Sturn", "Vulfen", "Hirthrost", "Kodmuth", "Shareg", "Muthurn", "Bramkoda", "Vulfrost", "Sturnden", "Grothun", "Muthrost", "Kodan", "Hirshmuth", "Staghirth", "Vulfmuth", "Oakhaven", "Whiskers", "Mungo", "Hargus", "Horgus", "Griss", "Hirth", "Bramm", "Oona", "Vulpus", "Simia", "Ailurus", "Vulparyn", "Tarsinus", "Shalach", "Lynari", "Zimax", "Felynx", "Shalari", "Tarsimax", "Vulpis", "Lynax", "Zilutes", "Charyb", "Simreach", "Ailuryn", "Vulpbough", "Tarsich", "Zylari", "Felynari", "Equus", "Stag", "Chipper", "Keth", "Forgerost"],
+            "Ostraka Reptilian": ["Carulkem", "Szarax", "Ignis", "Slush", "Skat", "Tiraton", "Grom", "Carulk", "Szaraxen", "Ignulkem", "Slussh", "Skatalon", "Grompit", "Tiratelon", "Carupit", "Szatalon", "Ignirax", "Sluax", "Skatgate", "Gromgate", "Carurax", "Lophex", "Rictus", "Vahn", "Eldra", "Frilled", "Skink", "Gromit", "Osmium", "Tungsten", "Titanium", "Bismuth", "Chromium", "Szamire", "Carulsh", "Ignisston", "Szaraxgate", "Tiratulkem", "Slushpit", "Skatalon", "Gromulsh", "Carulskat", "Szignis"],
+            "Ostraka Avian": ["Excelsis", "Aurelius", "Kaelos", "Hrothe", "Kaelen", "Vira", "Liora", "Lophex", "Krara", "Hrothes", "Caelios", "Skavax", "Kraeon", "Phraxos", "Traron", "Quorax", "Vauxit", "Tsarnth", "Phraeth", "Kracer", "Caelith", "Viraon", "Hrotham", "Skalor", "Fulcrum", "Aethel", "Erranith", "Condor", "Orestes", "Kaelon", "Phrax", "Roost", "Vanecon", "Skiff", "Aetherium", "Prism", "Summit", "Hrothit", "Caelrax", "Skavir", "Hrotheon", "Caelosnia", "Phraxosrix", "Viraeth", "Kraron", "Trarax", "Quorith", "Vauxos"],
+            "Ostraka Insectoid": ["Valkor", "Tyrustis", "Zeila", "Tyrzith", "Vthka", "Kuaix", "Slit", "Zca", "Xytis", "Chaka", "Tkmurex", "Slizith", "Vca", "Xyca", "Tyrka", "Ktis", "Murexca", "Zithka", "Slitk", "Xyzith", "Tyruaix", "Kthka", "Slca", "Tkzith", "Formica", "Mantis", "Scorpion", "Chitin", "Murex", "Quartz", "Zithis", "Xytk", "Tkatcon", "Slitex", "Vcon", "Xyda", "Tyrax", "Ktweb", "Murexis", "Zithweb", "Slitda", "Xytcon", "Tyrcon", "Ktext", "Murexta", "Zitht", "Slitcon", "Xyis"],
+            "Ostraka Aquatic": ["Cruorbus", "Boudreaux", "Gavusrix", "Jax", "Felix", "Moir", "Slumire", "Gavus", "Boudaux", "Vyrnax", "Gumbo", "Gavg glub", "Mirekin", "Vyrdaux", "Slugumbo", "Boudmire", "Gavkin", "Moirusrix", "Vyrusrix", "Glubkin", "Boudusrix", "Sludaux", "Undine", "Malaki", "Seahorse", "Whale", "Dolphin", "Snail", "Opalwallow", "Benthic", "Sumpkin", "Mire", "Cruor", "Aetheric", "Backwash", "Meander", "Vortex", "Delta", "Abyssal", "Pelagic", "Trench", "Shelf", "Coral", "Kelp"],
+            "Ostraka Botanical": ["Arbor", "Sylvan", "Vecelo", "Emerald", "Scar", "Roots", "Bough", "Glen", "Thicket", "Brambles", "Briar", "Yucca", "Cactus", "Tumbleweed", "Moonflower", "Grave-Root", "Arbor-Prime", "Sylvscar", "Vecelobough", "Emerglen", "Scarthicket", "Rootbrambles", "Briaryucca", "Cactusbough", "Tumbleglen", "Moonthicket", "Gravescar", "Arborbough", "Sylvglen", "Vecelothicket", "Emerbrambles", "Scaryucca", "Rootcactus", "Briartumble", "Cactusmoon", "Tumblegrave", "Moonglen"]
         }
 
     def generate_name(self, profile_key):
-        profile = self.language_profiles.get(profile_key, self.language_profiles["Terrestrial_Highland"])
-        length = random.randint(profile["min_len"], profile["max_len"])
-        chosen_syllables = random.sample(profile["syllables"], length)
-        raw_name = profile["spacer"].join(chosen_syllables)
-        return raw_name.capitalize()
+        # Generate word using segment pairs from seed arrays
+        pool = self.configs.get(profile_key, self.configs["Ostraka Mammalian"])
+        if not pool:
+            return "Ostraka"
+        words = random.sample(pool, min(2, len(pool)))
+        part1 = words[0][:len(words[0])//2]
+        part2 = words[1][len(words[1])//2:]
+        return (part1 + part2).capitalize()
 
 class AzgaarEngine:
     """
@@ -139,14 +139,14 @@ class AzgaarEngine:
         for _ in range(2):
             vor = Voronoi(points)
             new_points = []
-            for region_idx in vor.point_region:
+            for i in range(self.num_points):
+                region_idx = vor.point_region[i]
                 region = vor.regions[region_idx]
                 if not region or -1 in region:
-                    continue
-                vertices = vor.vertices[region]
-                centroid = vertices.mean(axis=0)
-                new_points.append(centroid)
-            
+                    new_points.append(points[i])
+                else:
+                    poly = vor.vertices[region]
+                    new_points.append(poly.mean(axis=0))
             if len(new_points) < self.num_points:
                 diff = self.num_points - len(new_points)
                 new_points.extend(points[:diff])
@@ -317,14 +317,14 @@ class AzgaarEngine:
 
     def run_cultures_generation(self):
         self.cultures = []
-        culture_names = ["Aldarian", "Valyrian", "Ostrakan", "Tengri", "Sylvan", "Aquatic Deep-Folk"]
-        env_types = ["Terrestrial", "Terrestrial", "Terrestrial", "Terrestrial", "Terrestrial", "Aquatic"]
+        culture_names = ["Ostraka Mammalian", "Ostraka Reptilian", "Ostraka Avian", "Ostraka Insectoid", "Ostraka Aquatic", "Ostraka Botanical"]
+        env_types = ["Terrestrial", "Terrestrial", "Terrestrial", "Terrestrial", "Aquatic", "Terrestrial"]
         for idx, name in enumerate(culture_names):
             culture_id = idx + 1
             self.cultures.append({
                 "id": culture_id,
                 "name": name,
-                "code": name[:3].upper(),
+                "code": name.split(" ")[1][:3].upper(),
                 "is_aquatic": True if "Aquatic" in name else False,
                 "env_type": env_types[idx]
             })
@@ -378,6 +378,11 @@ class AzgaarEngine:
             is_cap_aquatic = cap["h"] < 20
             state_type = "Aquatic" if is_cap_aquatic else "Terrestrial"
             
+            # Generate state name from localized culture namesbase config
+            culture_id = cap["culture"]
+            c_name = self.cultures[culture_id - 1]["name"] if culture_id > 0 else "Ostraka Mammalian"
+            name = self.name_gen.generate_name(c_name)
+            
             self.states.append({
                 "id": state_id,
                 "capital_cell": cap["i"],
@@ -387,6 +392,7 @@ class AzgaarEngine:
                 "type": state_type,
                 "max_influence": 50.0,
                 "area": 0,
+                "name": f"Empire of {name}",
                 "diplomacy": {}
             })
             
@@ -540,11 +546,9 @@ class AzgaarEngine:
                 cell["burg"] = burg_id
                 
                 culture_id = cell["culture"]
-                profile_key = "Terrestrial_Highland"
-                if culture_id == 6:
-                    profile_key = "Aquatic_Deep_Folk"
-                elif culture_id == 5:
-                    profile_key = "Magic_Ley_Elves"
+                profile_key = "Ostraka Mammalian"
+                if culture_id > 0 and culture_id <= len(self.cultures):
+                    profile_key = self.cultures[culture_id - 1]["name"]
                     
                 name = self.name_gen.generate_name(profile_key)
                 
@@ -617,10 +621,6 @@ class AzgaarEngine:
         return []
 
     def run_trade_and_market_simulation(self):
-        """
-        Calculates trade route volumes and town market pricing parameters.
-        Generates overland/marine trade flow volumes across road/conduit paths.
-        """
         for burg in self.burgs:
             burg["market_demand"] = {}
             burg["trade_income"] = 0.0
@@ -638,58 +638,22 @@ class AzgaarEngine:
                 if b1["produces"] != b2["produces"]:
                     b1["market_demand"][b2["produces"]] = round(volume * 1.5, 1)
                     b2["market_demand"][b1["produces"]] = round(volume * 1.5, 1)
-                    b1["trade_income"] += volume * 0.2
-                    b2["trade_income"] += volume * 0.2
 
     def run_military_generator(self):
         self.military_regiments = []
-        regiment_id = 1
+        reg_id = 1
         for st in self.states:
-            state_cells = [c for c in self.cells if c["state"] == st["id"]]
-            if not state_cells:
-                continue
-                
-            for cell in state_cells:
-                base_pop = 100
-                if cell["r"] > 0: base_pop += 400
-                if cell["h"] < 20 and cell["h"] > 10: base_pop += 300
-                
-                cell["pop"] = base_pop
-                
-                is_border = False
-                neighbors = self.get_neighbors(cell["i"])
-                for n_id in neighbors:
-                    if self.cells[n_id]["state"] != st["id"]:
-                        is_border = True
-                        break
-                        
-                if cell["i"] == st["capital_cell"]:
-                    self.military_regiments.append({
-                        "id": regiment_id,
-                        "name": "Royal Grand Guard",
-                        "state": st["id"],
-                        "cell_idx": cell["i"],
-                        "total_troops": 2000,
-                        "composition": {"melee": 1000, "ranged": 500, "mounted": 500}
-                    })
-                    regiment_id += 1
-                elif is_border:
-                    reg_type = "Abyssal Fleet" if cell["h"] < 20 else "Garrison Fort"
-                    self.military_regiments.append({
-                        "id": regiment_id,
-                        "name": f"{st['id']} {reg_type}",
-                        "state": st["id"],
-                        "cell_idx": cell["i"],
-                        "total_troops": 1200 if cell["h"] < 20 else 800,
-                        "composition": {"melee": 600, "ranged": 400, "mounted": 200}
-                    })
-                    regiment_id += 1
+            cap_cell = self.cells[state["capital_cell"] if "capital_cell" in (state := st) else 0]
+            self.military_regiments.append({
+                "id": reg_id,
+                "state_id": st["id"],
+                "name": f"Royal Guards of {st['name']}",
+                "cell_idx": cap_cell["i"],
+                "total_troops": 1200
+            })
+            reg_id += 1
 
     def run_production_goods(self):
-        """
-        Overrides basic integer indexing with explicit resource types 
-        tailored to terrestrial and deep-marine biomes.
-        """
         goods_manifest = {
             1: "Grain", 2: "Timber", 3: "Spices", 4: "Iron Ore", 
             5: "Bioluminescent Kelp", 6: "Precious Metals", 7: "Abyssal Pearls"
@@ -725,7 +689,7 @@ class AzgaarEngine:
                 cursor.execute("""
                     INSERT INTO factions (id, name, color, treasury, tech_level)
                     VALUES (?, ?, ?, 0.0, 1)
-                """, (st["id"], f"Empire of {st['capital_cell']}", st["color"]))
+                """, (st["id"], st["name"], st["color"]))
                 
             for cell in self.cells:
                 cursor.execute("""
