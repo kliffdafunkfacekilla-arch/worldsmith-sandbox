@@ -1,7 +1,7 @@
 import sys
 import random
 import os
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtWidgets import QWidget, QMessageBox
 from PyQt6.QtCore import Qt, QRect, QRectF, pyqtSignal, QPointF
 from PyQt6.QtGui import QPainter, QColor, QBrush, QPen, QPolygonF, QPainterPath, QFont, QPixmap
 
@@ -28,6 +28,8 @@ class MapViewerWidget(QWidget):
         self.paint_culture_value = 1
         self.paint_religion_value = 1
         self.paint_river_value = 1
+        self.paint_biome_value = "Hot Desert"
+        self.paint_good_value = "Grain"
         self.brush_size = 1 # 1, 2, or 3 cell radius
 
         # Layer visibility flags
@@ -36,31 +38,37 @@ class MapViewerWidget(QWidget):
             "Biomes": True,
             "Political States": True,
             "Provinces": True,
-            "Cultures": True,
-            "Magic Layer": True,
-            "Production Goods": True,
+            "Culture": True,
+            "Religion": True,
+            "Burgs": True,
+            "Routes": True,
             "Rivers": True,
             "Roads": True,
             "Military Regiments": True,
-            "Burgs": True
+            "Zones": True,
+            "Temperature": True,
+            "Precipitation": True,
+            "Population Density": True,
+            "Ice": True
         }
 
         # Sprite sheet assets loader
         self.tile_pixmap = None
         self.sprite_pixmap = None
         
-        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        tilemap_path = os.path.join(root_dir, "fantasyhextiles_v3_borderless.png")
-        sprites_path = os.path.join(root_dir, "d4np5o7-d68e778b-415c-4b59-90c5-c61c55f015e7.png")
+        # We need to find the files in the workspace directory.
+        # This resolves to c:/Users/krazy/Desktop/worldsmith-sandbox
+        workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        tilemap_path = os.path.join(workspace_dir, "fantasyhextiles_v3_borderless.png")
+        sprites_path = os.path.join(workspace_dir, "d4np5o7-d68e778b-415c-4b59-90c5-c61c55f015e7.png")
         
-        # Check parent folder too
-        if not os.path.exists(tilemap_path):
-            tilemap_path = os.path.join(os.path.dirname(root_dir), "fantasyhextiles_v3_borderless.png")
-            sprites_path = os.path.join(os.path.dirname(root_dir), "d4np5o7-d68e778b-415c-4b59-90c5-c61c55f015e7.png")
-
-        if os.path.exists(tilemap_path):
+        if not os.path.exists(tilemap_path) or not os.path.exists(sprites_path):
+            print(f"WARNING: Missing tilemap/sprites in {workspace_dir}!")
+            # We'll use a delayed popup after window shows to ensure it renders correctly
+            self._missing_assets = True
+        else:
+            self._missing_assets = False
             self.tile_pixmap = QPixmap(tilemap_path)
-        if os.path.exists(sprites_path):
             self.sprite_pixmap = QPixmap(sprites_path)
 
     def mouseMoveEvent(self, event):
@@ -77,52 +85,137 @@ class MapViewerWidget(QWidget):
                 biome = f"{biome} (Magic: {mag})"
                 
             self.cell_hovered.emit(closest_cell_idx, elev, biome, state)
+            
+            if event.buttons() & Qt.MouseButton.LeftButton:
+                self.apply_brush_to_cell(closest_cell_idx)
 
     def mousePressEvent(self, event):
         pos = event.position()
         closest_cell_idx = self.find_closest_cell(pos)
 
+        if event.button() == Qt.MouseButton.RightButton:
+            if self.brush_mode == "Road Paint" and hasattr(self, "road_paint_active_path") and self.road_paint_active_path:
+                if len(self.road_paint_active_path) > 1:
+                    self.parent.map_engine.roads.append({
+                        "id": len(self.parent.map_engine.roads) + 1,
+                        "from_burg": 0, "to_burg": 0,
+                        "path": self.road_paint_active_path,
+                        "type": "Custom Road"
+                    })
+                self.road_paint_active_path = None
+                self.parent.statusBar().showMessage("Road Paint: Road saved.")
+                self.update()
+            return
+
         if closest_cell_idx is not None:
-            # Gather cells within brush size radius
+            self.apply_brush_to_cell(closest_cell_idx)
+            
+    def apply_brush_to_cell(self, closest_cell_idx):
+        if self.brush_mode == "Road Paint":
+            if not hasattr(self, "road_paint_active_path") or self.road_paint_active_path is None:
+                self.road_paint_active_path = [closest_cell_idx]
+                self.parent.statusBar().showMessage("Road Paint: Started. Click the next cell to draw the path. Right-click to finish.")
+            else:
+                last_cell = self.road_paint_active_path[-1]
+                path_segment = self.parent.map_engine.find_astar_path(last_cell, closest_cell_idx)
+                if path_segment:
+                    self.road_paint_active_path.extend(path_segment[1:])
+                self.parent.statusBar().showMessage("Road Paint: Path extended. Click next cell, or Right-click to finish.")
+            self.update()
+            return
+            
+        if self.brush_mode == "Road Delete":
+            # Find any road containing this cell and remove it
+            original_len = len(self.parent.map_engine.roads)
+            self.parent.map_engine.roads = [r for r in self.parent.map_engine.roads if closest_cell_idx not in r.get("path", [])]
+            if len(self.parent.map_engine.roads) < original_len:
+                self.parent.statusBar().showMessage("Road deleted.")
+            self.update()
+            return
+
+        if self.brush_mode == "Military Paint":
+            state = self.parent.map_engine.cells[closest_cell_idx]["state"]
+            if state > 0:
+                # Remove existing if clicking on one, otherwise add
+                existing = [r for r in self.parent.map_engine.military_regiments if r["cell_idx"] == closest_cell_idx]
+                if existing:
+                    self.parent.map_engine.military_regiments = [r for r in self.parent.map_engine.military_regiments if r["cell_idx"] != closest_cell_idx]
+                    self.parent.statusBar().showMessage("Military Paint: Regiment removed.")
+                else:
+                    reg_id = max([r["id"] for r in self.parent.map_engine.military_regiments] + [0]) + 1
+                    state_name = next((s["name"] for s in self.parent.map_engine.states if s["id"] == state), "Unknown")
+                    self.parent.map_engine.military_regiments.append({
+                        "id": reg_id,
+                        "state_id": state,
+                        "name": f"1st Army of {state_name}",
+                        "cell_idx": closest_cell_idx,
+                        "total_troops": 1000
+                    })
+                    self.parent.statusBar().showMessage("Military Paint: Regiment deployed.")
+            else:
+                self.parent.statusBar().showMessage("Military Paint: Cannot deploy troops on unowned land.")
+            self.update()
+            return
+            
+        if self.brush_mode == "Zone Paint":
             affected_cells = self.get_cells_in_radius(closest_cell_idx, self.brush_size)
-            
             for cell_idx in affected_cells:
-                if self.brush_mode == "Magic Paint":
-                    self.magic_data[cell_idx] = self.active_paint_magic
-                    self.cell_clicked.emit(cell_idx)
-                elif self.brush_mode == "Height Paint":
-                    self.parent.map_engine.cells[cell_idx]["h"] = self.paint_height_value
-                elif self.brush_mode == "State Paint":
-                    self.parent.map_engine.cells[cell_idx]["state"] = self.paint_state_value
-                elif self.brush_mode == "Province Paint":
-                    self.parent.map_engine.cells[cell_idx]["province"] = self.paint_province_value
-                elif self.brush_mode == "Culture Paint":
-                    self.parent.map_engine.cells[cell_idx]["culture"] = self.paint_culture_value
-                elif self.brush_mode == "Religion Paint":
-                    self.parent.map_engine.cells[cell_idx]["religion"] = self.paint_religion_value
-                elif self.brush_mode == "River Paint":
-                    self.parent.map_engine.cells[cell_idx]["r"] = self.paint_river_value
-                elif self.brush_mode == "Burg Paint":
-                    cell = self.parent.map_engine.cells[cell_idx]
-                    if cell["burg"] == 0:
-                        burg_id = len(self.parent.map_engine.burgs) + 1
-                        cell["burg"] = burg_id
-                        self.parent.map_engine.burgs.append({
-                            "id": burg_id,
-                            "cell_idx": cell_idx,
-                            "name": f"New Settlement {burg_id}",
-                            "population": 15
-                        })
-                    else:
-                        self.parent.map_engine.burgs = [b for b in self.parent.map_engine.burgs if b["id"] != cell["burg"]]
-                        cell["burg"] = 0
-            
-            if self.brush_mode == "Height Paint":
-                self.parent.map_engine.run_biomes_climate()
-                self.parent.map_engine.run_production_goods()
-                
+                self.parent.map_engine.cells[cell_idx]["zone"] = 1 if event.button() == Qt.MouseButton.LeftButton else 0
+            self.update()
+            return
+
+        # Handle terraforming tools first
+        if self.brush_mode in ["Height Raise", "Height Lower", "Height Smooth"]:
+            self.parent.map_engine.apply_height_brush(closest_cell_idx, self.brush_size + 1, self.brush_mode, intensity=8)
             self.parent.load_map_data_to_viewer()
             self.update()
+            return
+            
+        # Gather cells within brush size radius for standard painting
+        affected_cells = self.get_cells_in_radius(closest_cell_idx, self.brush_size)
+        
+        for cell_idx in affected_cells:
+            if self.brush_mode == "Magic Paint":
+                self.magic_data[cell_idx] = self.active_paint_magic
+                self.cell_clicked.emit(cell_idx)
+            elif self.brush_mode == "Height Paint":
+                self.parent.map_engine.cells[cell_idx]["h"] = self.paint_height_value
+            elif self.brush_mode == "State Paint":
+                self.parent.map_engine.cells[cell_idx]["state"] = self.paint_state_value
+            elif self.brush_mode == "Province Paint":
+                self.parent.map_engine.cells[cell_idx]["province"] = self.paint_province_value
+            elif self.brush_mode == "Culture Paint":
+                self.parent.map_engine.cells[cell_idx]["culture"] = self.paint_culture_value
+            elif self.brush_mode == "Religion Paint":
+                self.parent.map_engine.cells[cell_idx]["religion"] = self.paint_religion_value
+            elif self.brush_mode == "River Paint":
+                self.parent.map_engine.cells[cell_idx]["r"] = self.paint_river_value
+            elif self.brush_mode == "Biome Paint":
+                self.parent.map_engine.cells[cell_idx]["biome"] = self.paint_biome_value
+                self.biomes_data[cell_idx] = self.paint_biome_value
+            elif self.brush_mode == "Production Paint":
+                self.parent.map_engine.cells[cell_idx]["good"] = self.paint_good_value
+            elif self.brush_mode == "Burg Paint":
+                cell = self.parent.map_engine.cells[cell_idx]
+                if cell["burg"] == 0:
+                    burg_id = len(self.parent.map_engine.burgs) + 1
+                    cell["burg"] = burg_id
+                    self.parent.map_engine.burgs.append({
+                        "id": burg_id,
+                        "cell_idx": cell_idx,
+                        "name": f"New Settlement {burg_id}",
+                        "population": 15
+                    })
+                else:
+                    self.parent.map_engine.burgs = [b for b in self.parent.map_engine.burgs if b["id"] != cell["burg"]]
+                    cell["burg"] = 0
+        
+        if self.brush_mode in ["Height Paint", "Height Raise", "Height Lower", "Height Smooth"]:
+            self.parent.map_engine.run_biomes_climate()
+            self.parent.map_engine.run_production_goods()
+            
+        self.parent.load_map_data_to_viewer()
+        self.update()
 
     def get_cells_in_radius(self, center_idx, radius):
         visited = {center_idx}
@@ -248,6 +341,32 @@ class MapViewerWidget(QWidget):
                     "Precious Metals": "#eab308", "Abyssal Pearls": "#8b5cf6", "Salt": "#f1f5f9"
                 }
                 color = QColor(good_colors.get(good, "#27272a"))
+            elif self.layer_mode == "Temperature" and self.visibility_map["Temperature"]:
+                temp = cell.get("temp", 15)
+                # Map -20 to 40 C to blue -> red
+                t = max(0, min(1, (temp + 20) / 60))
+                color = QColor(int(t * 255), int((1 - abs(t - 0.5) * 2) * 200), int((1 - t) * 255))
+            elif self.layer_mode == "Precipitation" and self.visibility_map["Precipitation"]:
+                prec = cell.get("prec", 20)
+                # Map 0 to 100 to brown -> green -> blue
+                if prec < 30:
+                    t = prec / 30
+                    color = QColor(int(200 - t * 100), int(150 + t * 50), 50)
+                else:
+                    t = min(1, (prec - 30) / 70)
+                    color = QColor(50, int(200 - t * 100), int(100 + t * 155))
+            elif self.layer_mode == "Population Density" and self.visibility_map["Population Density"]:
+                pop = cell.get("pop", 0)
+                t = min(1, pop / 10.0) # Assume 10 is high density
+                color = QColor(int(255 * t), 50, int(255 - 255 * t))
+            elif self.layer_mode == "Ice" and self.visibility_map["Ice"]:
+                temp = cell.get("temp", 15)
+                if temp < -5:
+                    color = QColor(240, 248, 255) # AliceBlue for deep ice
+                elif temp < 0:
+                    color = QColor(220, 230, 240)
+                else:
+                    color = QColor("#27272a") # Base ground
 
             painter.fillPath(path, QBrush(color))
             painter.strokePath(path, QPen(QColor("#1e293b"), 0.5))
@@ -289,12 +408,21 @@ class MapViewerWidget(QWidget):
             for road in self.parent.map_engine.roads:
                 path = road.get("path", [])
                 if len(path) >= 2:
-                    is_aquatic = (road["type"] == "Abyssal Conduit")
+                    is_aquatic = (road.get("type") == "Abyssal Conduit")
                     painter.setPen(QPen(QColor("#06b6d4") if is_aquatic else QColor("#d97706"), 2, Qt.PenStyle.DotLine if is_aquatic else Qt.PenStyle.SolidLine))
                     for step in range(len(path) - 1):
                         c1 = cells[path[step]]
                         c2 = cells[path[step+1]]
                         painter.drawLine(QPointF(c1["x"], c1["y"]), QPointF(c2["x"], c2["y"]))
+
+            # Render active road being painted
+            if hasattr(self, "road_paint_active_path") and self.road_paint_active_path:
+                painter.setPen(QPen(QColor("#f59e0b"), 3, Qt.PenStyle.DashLine))
+                path = self.road_paint_active_path
+                for step in range(len(path) - 1):
+                    c1 = cells[path[step]]
+                    c2 = cells[path[step+1]]
+                    painter.drawLine(QPointF(c1["x"], c1["y"]), QPointF(c2["x"], c2["y"]))
 
         painter.setPen(QPen(QColor("#04D361"), 1, Qt.PenStyle.DashLine))
         painter.setBrush(Qt.BrushStyle.NoBrush)

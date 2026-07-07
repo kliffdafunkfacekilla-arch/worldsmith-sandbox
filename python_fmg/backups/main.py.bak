@@ -1,0 +1,959 @@
+import os
+import sys
+import sqlite3
+import json
+import urllib.request
+import random
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
+    QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox, QSlider, QFileDialog, QDialog, QListWidget, QInputDialog, QCheckBox
+)
+from PyQt6.QtCore import Qt, QPointF
+from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont
+
+# Add project root directory to path for imports
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from python_fmg.core.ai_worker import OllamaPromptWorker, LoreAuditWorker
+from python_fmg.renderers.map_viewer import MapViewerWidget
+from python_fmg.renderers.notebook_editor import MarkdownNotebookEditor
+from python_fmg.core.azgaar_engine import AzgaarEngine, CosmosEngine
+from python_fmg.core.wiki_compiler import WikiCompiler
+from python_fmg.renderers.celestial_widget import CelestialPreviewWidget
+from python_fmg.core.template_manager import TemplateManager
+from python_fmg.core.emblem_generator import EmblemGenerator
+from python_fmg.core.burg_generator import BurgGenerator
+
+class BurgMapDialog(QDialog):
+    def __init__(self, burg, cell_elevation, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Settlement Layout - {burg['name']}")
+        self.resize(500, 500)
+        self.burg = burg
+        self.cell_elevation = cell_elevation
+        
+        self.burg_gen = BurgGenerator()
+        self.layout_data = self.burg_gen.generate_settlement_layout(
+            burg["cell_idx"], burg["population"], cell_elevation
+        )
+        
+        self.layout = QVBoxLayout(self)
+        self.lbl_info = QLabel(f"<b>{burg['name']}</b> (Pop: {burg['population']}k, Grid: {burg['cell_idx']})")
+        self.layout.addWidget(self.lbl_info)
+        
+        self.canvas = QWidget()
+        self.canvas.setMinimumSize(400, 400)
+        self.canvas.paintEvent = self.draw_map
+        self.layout.addWidget(self.canvas)
+
+    def draw_map(self, event):
+        painter = QPainter(self.canvas)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.canvas.rect(), QBrush(QColor("#1e1e24")))
+        
+        # Scale drawing coordinate vectors
+        scale_x = self.canvas.width() / 200.0
+        scale_y = self.canvas.height() / 200.0
+        
+        # Draw blocks
+        painter.setPen(QPen(QColor("#2d2d34"), 1))
+        painter.setBrush(QBrush(QColor("#7f1d1d") if self.cell_elevation < 20 else QColor("#d97706")))
+        for (bx, by, bw, bh) in self.layout_data["blocks"]:
+            painter.drawRect(
+                int(bx * scale_x), int(by * scale_y),
+                int(bw * scale_x), int(bh * scale_y)
+            )
+            
+        # Draw streets
+        painter.setPen(QPen(QColor("#ffffff") if self.cell_elevation < 20 else QColor("#eab308"), 3))
+        for (pt1, pt2) in self.layout_data["streets"]:
+            p1 = QPointF(pt1[0] * scale_x, pt1[1] * scale_y)
+            p2 = QPointF(pt2[0] * scale_x, pt2[1] * scale_y)
+            painter.drawLine(p1, p2)
+            
+        # Draw central plaza
+        painter.setPen(QPen(QColor("#000000"), 2))
+        painter.setBrush(QBrush(QColor("#a855f7")))
+        cx = self.layout_data["center"][0] * scale_x
+        cy = self.layout_data["center"][1] * scale_y
+        r = self.layout_data["plaza_radius"] * scale_x
+        painter.drawEllipse(QPointF(cx, cy), r, r)
+
+class ElementEditorDialog(QDialog):
+    def __init__(self, element_type, items_list, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Edit {element_type}s")
+        self.resize(550, 450)
+        self.element_type = element_type
+        self.items_list = items_list
+        
+        self.layout = QVBoxLayout(self)
+        self.list_widget = QListWidget()
+        self.refresh_list()
+        self.layout.addWidget(self.list_widget)
+        
+        h_layout = QHBoxLayout()
+        self.btn_edit = QPushButton("✏️ Edit Attributes")
+        self.btn_edit.clicked.connect(self.edit_item)
+        self.btn_add = QPushButton("➕ Add New")
+        self.btn_add.clicked.connect(self.add_item)
+        self.btn_delete = QPushButton("🗑️ Delete Selected")
+        self.btn_delete.clicked.connect(self.delete_item)
+        self.btn_paint = QPushButton("🎨 Paint Element")
+        self.btn_paint.clicked.connect(self.paint_item)
+        
+        h_layout.addWidget(self.btn_edit)
+        h_layout.addWidget(self.btn_add)
+        h_layout.addWidget(self.btn_delete)
+        h_layout.addWidget(self.btn_paint)
+        self.layout.addLayout(h_layout)
+
+    def refresh_list(self):
+        self.list_widget.clear()
+        for idx, item in enumerate(self.items_list):
+            if self.element_type == "State":
+                gov = item.get("type", "Terrestrial")
+                cult = item.get("capital_cell", 0)
+                exp = item.get("expansionism", 1.0)
+                desc = f"{item.get('name', 'Unnamed')} (Gov: {gov}, Seed Cell: {cult}, Expansionism: {exp})"
+            elif self.element_type == "Culture":
+                env = item.get("env_type", "Terrestrial")
+                desc = f"{item.get('name', 'Unnamed')} (Code: {item.get('code', 'C').upper()}, Type: {env})"
+            elif self.element_type == "Religion":
+                rel_type = item.get("type", "Organized")
+                desc = f"{item.get('name', 'Unnamed')} (Type: {rel_type})"
+            else:
+                desc = f"{item.get('name', 'Unnamed')}"
+            self.list_widget.addItem(f"{idx + 1}: {desc}")
+
+    def edit_item(self):
+        row = self.list_widget.currentRow()
+        if row < 0: return
+        item = self.items_list[row]
+        
+        new_name, ok1 = QInputDialog.getText(self, "Edit Element Name", "Name:", text=item.get('name', ''))
+        if ok1 and new_name.strip():
+            item["name"] = new_name.strip()
+            
+            if self.element_type == "State":
+                gov_types = ["Terrestrial", "Aquatic", "Nomadic", "Sylvan"]
+                new_gov, ok2 = QInputDialog.getItem(self, "Edit Government Type", "Government / Expansion Medium:", gov_types, gov_types.index(item.get("type", "Terrestrial")), False)
+                if ok2:
+                    item["type"] = new_gov
+                    
+                new_culture, ok3 = QInputDialog.getInt(self, "Edit Associated Culture ID", "Culture ID for Capital Cell:", value=item.get("capital_cell", 1), min=1, max=100)
+                if ok3:
+                    item["capital_cell"] = new_culture
+
+                new_exp, ok4 = QInputDialog.getDouble(self, "Edit Expansionism Modifier", "Expansion Speed Factor (0.1-5.0):", value=item.get("expansionism", 1.0), min=0.1, max=5.0, decimals=2)
+                if ok4:
+                    item["expansionism"] = new_exp
+
+                new_color, ok5 = QInputDialog.getText(self, "Edit Hex Color Code", "State Map Color Code:", text=item.get('color', '#ffffff'))
+                if ok5 and new_color.strip().startswith("#"):
+                    item["color"] = new_color.strip()
+
+            elif self.element_type == "Culture":
+                new_code, ok2 = QInputDialog.getText(self, "Edit Culture Code", "Abbreviation (Max 3 chars):", text=item.get('code', ''))
+                if ok2 and new_code.strip():
+                    item["code"] = new_code.strip().upper()
+
+                env_types = ["Terrestrial", "Aquatic", "Nomadic"]
+                new_env, ok3 = QInputDialog.getItem(self, "Edit Environmental Affinity", "Terrain Migration Type:", env_types, env_types.index(item.get("env_type", "Terrestrial")), False)
+                if ok3:
+                    item["env_type"] = new_env
+
+            elif self.element_type == "Religion":
+                rel_types = ["Organized", "Paganism", "Cult", "Monotheism"]
+                new_rel_type, ok2 = QInputDialog.getItem(self, "Edit Religion Type", "Category Type:", rel_types, rel_types.index(item.get("type", "Organized")), False)
+                if ok2:
+                    item["type"] = new_rel_type
+            
+            self.refresh_list()
+            self.parent().map_engine.sink_generated_world_to_db(self.parent().db_path)
+            self.parent().load_map_data_to_viewer()
+
+    def add_item(self):
+        new_name, ok = QInputDialog.getText(self, "Add Element", f"New {self.element_type} Name:")
+        if ok and new_name.strip():
+            new_id = len(self.items_list) + 1
+            if self.element_type == "State":
+                self.items_list.append({
+                    "id": new_id, "capital_cell": 1,
+                    "color": f"#{random.randint(50,255):02x}{random.randint(50,255):02x}{random.randint(50,255):02x}",
+                    "expansionism": 1.0, "is_aquatic": False, "type": "Terrestrial", "max_influence": 50.0,
+                    "name": new_name.strip(), "diplomacy": {}, "border_friction": {}
+                })
+            elif self.element_type == "Culture":
+                self.items_list.append({"id": new_id, "name": new_name.strip(), "code": new_name[:3].upper(), "is_aquatic": False, "env_type": "Terrestrial"})
+            elif self.element_type == "Religion":
+                self.items_list.append({"id": new_id, "name": new_name.strip(), "type": "Organized"})
+            
+            self.refresh_list()
+            self.parent().map_engine.sink_generated_world_to_db(self.parent().db_path)
+            self.parent().load_map_data_to_viewer()
+
+    def delete_item(self):
+        row = self.list_widget.currentRow()
+        if row < 0: return
+        self.items_list.pop(row)
+        self.refresh_list()
+        self.parent().map_engine.sink_generated_world_to_db(self.parent().db_path)
+        self.parent().load_map_data_to_viewer()
+
+    def paint_item(self):
+        row = self.list_widget.currentRow()
+        if row < 0: return
+        item = self.items_list[row]
+        target_id = item.get("id", row + 1)
+        
+        # Set main brush config settings
+        if self.element_type == "State":
+            self.parent().cb_brush_mode.setCurrentText("State Paint")
+            self.parent().map_viewer.paint_state_value = target_id
+        elif self.element_type == "Culture":
+            self.parent().cb_brush_mode.setCurrentText("Culture Paint")
+            self.parent().map_viewer.paint_culture_value = target_id
+        elif self.element_type == "Religion":
+            self.parent().cb_brush_mode.setCurrentText("Religion Paint")
+            self.parent().map_viewer.paint_religion_value = target_id
+        self.close()
+
+class TemplateDialog(QDialog):
+    def __init__(self, template_mgr, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Customize World Templates")
+        self.resize(500, 400)
+        self.template_mgr = template_mgr
+        
+        self.layout = QVBoxLayout(self)
+        self.layout.addWidget(QLabel("<b>Custom Worldbuilding Checklists & Templates:</b>"))
+        
+        self.cb_templates = QComboBox()
+        self.layout.addWidget(self.cb_templates)
+        
+        self.txt_fields = QTextEdit()
+        self.txt_fields.setPlaceholderText("Enter template fields, one per line...")
+        self.layout.addWidget(self.txt_fields)
+        
+        h_layout = QHBoxLayout()
+        self.btn_new_cat = QPushButton("➕ Add Category")
+        self.btn_new_cat.clicked.connect(self.add_new_category)
+        self.btn_save_template = QPushButton("💾 Save Template")
+        self.btn_save_template.clicked.connect(self.save_current_template)
+        
+        h_layout.addWidget(self.btn_new_cat)
+        h_layout.addWidget(self.btn_save_template)
+        self.layout.addLayout(h_layout)
+        
+        self.cb_templates.currentTextChanged.connect(self.load_selected_template)
+        self.refresh_categories()
+
+    def refresh_categories(self):
+        self.cb_templates.clear()
+        self.templates = self.template_mgr.get_all_templates()
+        self.cb_templates.addItems(list(self.templates.keys()))
+
+    def load_selected_template(self, category):
+        if not category or category not in self.templates:
+            return
+        fields = self.templates[category]
+        self.txt_fields.setPlainText("\n".join(fields))
+
+    def add_new_category(self):
+        from PyQt6.QtWidgets import QInputDialog
+        text, ok = QInputDialog.getText(self, "New Template Category", "Category Name:")
+        if ok and text.strip():
+            self.template_mgr.save_template(text.strip(), ["Default Field"])
+            self.refresh_categories()
+            self.cb_templates.setCurrentText(text.strip())
+
+    def save_current_template(self):
+        category = self.cb_templates.currentText()
+        if not category:
+            return
+        fields = [f.strip() for f in self.txt_fields.toPlainText().split("\n") if f.strip()]
+        self.template_mgr.save_template(category, fields)
+        QMessageBox.information(self, "Success", f"Template '{category}' updated successfully.")
+
+class WorldsmithMainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Worldsmith Sandbox - Independent Worldbuilder")
+        self.resize(1400, 950)
+        
+        self.db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "lore_forge_world.db"))
+        self.ai_worker = None
+        self.audit_worker = None
+        self.selected_cell_idx = None
+        
+        self.template_mgr = TemplateManager(self.db_path)
+        self.emblem_gen = EmblemGenerator()
+        
+        # Calendar settings
+        self.custom_year_length = 420  
+        self.custom_seasons = ["Sowing-Time", "High-Sun", "Gold-Leaf", "Deep-Frost"]
+        self.cosmos_engine = CosmosEngine(self.custom_year_length, self.custom_seasons)
+        
+        # Initialize full Azgaar simulation logic including all parameters and layers
+        self.map_engine = AzgaarEngine()
+
+        # Modern Dark-Mode Stylesheet
+        self.setStyleSheet("""
+            QMainWindow, QWidget {
+                background-color: #121214;
+                color: #E1E1E6;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 13px;
+            }
+            QGroupBox {
+                border: 1px solid #29292E;
+                border-radius: 6px;
+                margin-top: 10px;
+                padding-top: 10px;
+                font-weight: bold;
+                color: #04D361;
+            }
+            QPushButton, QComboBox {
+                background-color: #202024;
+                border: 1px solid #29292E;
+                color: #E1E1E6;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover, QComboBox:hover {
+                background-color: #29292E;
+                border-color: #04D361;
+            }
+            QLineEdit, QTextEdit, QListWidget {
+                background-color: #1c1c21;
+                border: 1px solid #29292E;
+                border-radius: 4px;
+                padding: 6px;
+                color: #E1E1E6;
+            }
+            QLineEdit:focus, QTextEdit:focus {
+                border-color: #04D361;
+            }
+        """)
+
+        # Main Splitter
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.setCentralWidget(self.main_splitter)
+
+        # 1. Map Panel
+        self.map_container = QWidget()
+        map_layout = QVBoxLayout(self.map_container)
+        map_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Add Toolbar for Map Selection Layers and Magic Brush
+        map_toolbar = QHBoxLayout()
+        self.cb_layer = QComboBox()
+        self.cb_layer.addItems(["Elevation", "Biomes", "Political States", "Provinces", "Cultures", "Magic Layer", "Production Goods"])
+        self.cb_layer.currentTextChanged.connect(self.change_map_layer)
+        
+        self.chk_layer_visibility = QCheckBox("Show Layer")
+        self.chk_layer_visibility.setChecked(True)
+        self.chk_layer_visibility.stateChanged.connect(self.toggle_layer_visibility)
+
+        # Map Editor Brush Mode selector (AZGAAR FULL EQUIVALENT EDIT MODES)
+        self.cb_brush_mode = QComboBox()
+        self.cb_brush_mode.addItems(["Inspect", "Magic Paint", "Height Paint", "State Paint", "Province Paint", "Culture Paint", "Religion Paint", "River Paint", "Burg Paint"])
+        self.cb_brush_mode.currentTextChanged.connect(self.change_brush_mode)
+
+        self.lbl_brush_size = QLabel("<b>Brush Radius:</b>")
+        self.slider_brush_size = QSlider(Qt.Orientation.Horizontal)
+        self.slider_brush_size.setRange(1, 4)
+        self.slider_brush_size.setValue(1)
+        self.slider_brush_size.valueChanged.connect(self.change_brush_size)
+
+        self.cb_magic_brush = QComboBox()
+        self.cb_magic_brush.addItems(["Wild Magic", "Abyssal Corruption", "Ley Line Node", "Aether Storm", "None"])
+        self.cb_magic_brush.currentTextChanged.connect(self.change_magic_brush)
+        self.cb_magic_brush.setVisible(False)  
+        
+        # Elements Editor dropdown panel
+        self.cb_edit_element = QComboBox()
+        self.cb_edit_element.addItems(["Edit Element...", "States Table", "Cultures Table", "Religions Table"])
+        self.cb_edit_element.currentTextChanged.connect(self.open_element_table_editor)
+        
+        self.btn_regen = QPushButton("🎲 New World")
+        self.btn_regen.clicked.connect(self.trigger_world_regeneration)
+        
+        self.btn_load_world = QPushButton("📂 Load")
+        self.btn_load_world.clicked.connect(self.load_world_from_file)
+        
+        self.btn_save_world_file = QPushButton("💾 Save")
+        self.btn_save_world_file.clicked.connect(self.save_world_to_file)
+
+        # Explicit Tools Dropdown selector matching Azgaar
+        self.cb_tools = QComboBox()
+        self.cb_tools.addItems(["Tools", "Edit State", "Edit Culture", "Edit Religion", "Add Burg", "Delete Selected Element"])
+        self.cb_tools.currentTextChanged.connect(self.trigger_azgaar_tool_mode)
+
+        map_toolbar.addWidget(QLabel("<b>Layer:</b>"))
+        map_toolbar.addWidget(self.cb_layer)
+        map_toolbar.addWidget(self.chk_layer_visibility)
+        map_toolbar.addWidget(QLabel("<b>Brush:</b>"))
+        map_toolbar.addWidget(self.cb_brush_mode)
+        map_toolbar.addWidget(self.lbl_brush_size)
+        map_toolbar.addWidget(self.slider_brush_size)
+        map_toolbar.addWidget(self.cb_magic_brush)
+        map_toolbar.addWidget(self.cb_edit_element)
+        map_toolbar.addWidget(self.cb_tools)
+        map_toolbar.addWidget(self.btn_regen)
+        map_toolbar.addWidget(self.btn_load_world)
+        map_toolbar.addWidget(self.btn_save_world_file)
+        map_toolbar.addStretch()
+        
+        self.map_viewer = MapViewerWidget(self)
+        self.map_viewer.cell_hovered.connect(self.handle_cell_hovered)
+        self.map_viewer.cell_clicked.connect(self.handle_cell_painted)
+        
+        map_layout.addLayout(map_toolbar)
+        map_layout.addWidget(self.map_viewer)
+        self.main_splitter.addWidget(self.map_container)
+
+        # 2. Notebook Panel
+        self.note_container = QWidget()
+        note_layout = QVBoxLayout(self.note_container)
+        
+        self.note_title_input = QLineEdit()
+        self.note_title_input.setPlaceholderText("Note Title (e.g. Faction, Settlement, Region name)")
+        self.note_title_input.setStyleSheet("font-size: 14px; font-weight: bold;")
+        
+        self.note_editor = MarkdownNotebookEditor(self)
+        self.note_editor.tag_detected.connect(self.handle_tag_found)
+        self.note_editor.link_clicked.connect(self.handle_link_clicked)
+        
+        self.note_action_layout = QHBoxLayout()
+        self.btn_save_note = QPushButton("💾 Save Note")
+        self.btn_save_note.clicked.connect(self.save_current_note)
+        self.btn_delete_note = QPushButton("🗑️ Delete")
+        self.btn_compile_wiki = QPushButton("🌐 Compile Wiki")
+        self.btn_compile_wiki.clicked.connect(self.compile_static_wiki)
+        self.btn_bind_map = QPushButton("📍 Bind to Cell")
+        self.btn_bind_map.clicked.connect(self.bind_note_to_map_cell)
+        self.btn_import_note = QPushButton("📥 Import Note")
+        self.btn_import_note.clicked.connect(self.import_external_note)
+        
+        self.note_action_layout.addWidget(self.btn_save_note)
+        self.note_action_layout.addWidget(self.btn_bind_map)
+        self.note_action_layout.addWidget(self.btn_import_note)
+        self.note_action_layout.addWidget(self.btn_delete_note)
+        self.note_action_layout.addWidget(self.btn_compile_wiki)
+        
+        note_layout.addWidget(QLabel("<b>Obsidian-Style Notebook</b>"))
+        note_layout.addWidget(self.note_title_input)
+        note_layout.addWidget(self.note_editor)
+        note_layout.addLayout(self.note_action_layout)
+        self.main_splitter.addWidget(self.note_container)
+
+        # 3. Prompt-Driven AI Assistant Panel
+        self.ai_container = QWidget()
+        ai_layout = QVBoxLayout(self.ai_container)
+        
+        self.ai_prompt_history = QTextEdit()
+        self.ai_prompt_history.setReadOnly(True)
+        self.ai_prompt_history.setPlaceholderText("The AI will ask questions and guide your worldbuilding process...")
+        
+        self.ai_input = QLineEdit()
+        self.ai_input.setPlaceholderText("Answer prompts, ask to generate states, etc...")
+        self.ai_input.returnPressed.connect(self.send_ai_prompt)
+        
+        self.btn_send_prompt = QPushButton("⚡ Send Response")
+        self.btn_send_prompt.clicked.connect(self.send_ai_prompt)
+        
+        self.btn_customize_templates = QPushButton("🛠️ Customize Templates")
+        self.btn_customize_templates.clicked.connect(self.show_template_customizer)
+        
+        # Add Timeline Slider and Celestial Moon Previewer
+        self.timeline_layout = QVBoxLayout()
+        self.timeline_slider = QSlider(Qt.Orientation.Horizontal)
+        self.timeline_slider.setRange(1, self.custom_year_length)
+        self.timeline_slider.setValue(1)
+        self.timeline_slider.valueChanged.connect(self.handle_timeline_changed)
+        
+        self.lbl_timeline = QLabel(f"<b>Calendar Timeline (Day 1 / {self.custom_seasons[0]})</b>")
+        self.celestial_widget = CelestialPreviewWidget(self)
+        
+        # Inconsistency Feed Sidebar
+        self.inconsistency_list = QListWidget()
+        self.inconsistency_list.setStyleSheet("background-color: #2a1215; color: #f43f5e; border: 1px solid #b91c1c;")
+        self.inconsistency_list.itemDoubleClicked.connect(self.handle_inconsistency_double_clicked)
+        
+        self.timeline_layout.addWidget(self.lbl_timeline)
+        self.timeline_layout.addWidget(self.timeline_slider)
+        self.timeline_layout.addWidget(self.celestial_widget)
+        
+        ai_layout.addWidget(QLabel("<b>Co-Author Assistant</b>"))
+        ai_layout.addWidget(self.btn_customize_templates)
+        ai_layout.addWidget(self.ai_prompt_history)
+        ai_layout.addWidget(self.ai_input)
+        ai_layout.addWidget(self.btn_send_prompt)
+        ai_layout.addWidget(QLabel("<b>🚨 Unresolved Lore Contradictions</b>"))
+        ai_layout.addWidget(self.inconsistency_list)
+        ai_layout.addLayout(self.timeline_layout)
+        
+        self.main_splitter.addWidget(self.ai_container)
+
+        # Set sizes (40% Map, 35% Note, 25% AI)
+        self.main_splitter.setSizes([560, 490, 350])
+
+        self.statusBar = QStatusBar()
+        self.setStatusBar(self.statusBar)
+        self.statusBar.showMessage("Worldsmith ready.")
+
+        # Setup databases
+        self.setup_markers_db()
+        self.setup_magic_db()
+        self.trigger_world_regeneration()
+        self.load_unresolved_inconsistencies()
+
+        # Welcome Prompt
+        self.trigger_welcome_prompt()
+
+    def trigger_azgaar_tool_mode(self, tool_name):
+        if tool_name == "Tools": return
+        self.cb_tools.setCurrentIndex(0)
+        
+        if tool_name == "Edit State":
+            editor = ElementEditorDialog("State", self.map_engine.states, self)
+            editor.exec()
+        elif tool_name == "Edit Culture":
+            editor = ElementEditorDialog("Culture", self.map_engine.cultures, self)
+            editor.exec()
+        elif tool_name == "Edit Religion":
+            editor = ElementEditorDialog("Religion", self.map_engine.religions, self)
+            editor.exec()
+        elif tool_name == "Add Burg":
+            self.cb_brush_mode.setCurrentText("Burg Paint")
+            self.statusBar.showMessage("Click on a cell to add a new settlement burg.")
+        elif tool_name == "Delete Selected Element":
+            self.statusBar.showMessage("Delete items from Element editor dropdown tables directly.")
+
+    def toggle_layer_visibility(self, state):
+        layer_name = self.cb_layer.currentText()
+        self.map_viewer.visibility_map[layer_name] = (state == 2)
+        self.map_viewer.update()
+
+    def change_brush_size(self, val):
+        self.map_viewer.brush_size = val
+
+    def open_element_table_editor(self, val):
+        if val == "Edit Element...": return
+        self.cb_edit_element.setCurrentIndex(0)
+        
+        if val == "States Table":
+            editor = ElementEditorDialog("State", self.map_engine.states, self)
+        elif val == "Cultures Table":
+            editor = ElementEditorDialog("Culture", self.map_engine.cultures, self)
+        elif val == "Religions Table":
+            editor = ElementEditorDialog("Religion", self.map_engine.religions, self)
+        editor.exec()
+
+    def change_brush_mode(self, brush_name):
+        self.map_viewer.brush_mode = brush_name
+        self.cb_magic_brush.setVisible(brush_name == "Magic Paint")
+        
+        # Prompt for target paint parameters if applicable
+        if brush_name in ["State Paint", "Province Paint", "Culture Paint", "Religion Paint", "River Paint"]:
+            val, ok = QInputDialog.getInt(self, "Brush Parameter", f"Enter ID to paint for {brush_name}:", value=1, min=1, max=100)
+            if ok:
+                if brush_name == "State Paint": self.map_viewer.paint_state_value = val
+                elif brush_name == "Province Paint": self.map_viewer.paint_province_value = val
+                elif brush_name == "Culture Paint": self.map_viewer.paint_culture_value = val
+                elif brush_name == "Religion Paint": self.map_viewer.paint_religion_value = val
+                elif brush_name == "River Paint": self.map_viewer.paint_river_value = val
+        elif brush_name == "Height Paint":
+            val, ok = QInputDialog.getInt(self, "Height Parameter", "Enter target cell height (5-95):", value=50, min=5, max=95)
+            if ok:
+                self.map_viewer.paint_height_value = val
+
+    def load_world_from_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Load World File", "", "Database Files (*.db)")
+        if not file_path:
+            return
+        try:
+            import shutil
+            shutil.copy(file_path, self.db_path)
+            self.trigger_world_regeneration()
+            self.statusBar.showMessage(f"World loaded successfully from '{file_path}'.")
+        except Exception as e:
+            QMessageBox.critical(self, "Load Error", f"Failed to load world file: {e}")
+
+    def save_world_to_file(self):
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save World File", "", "Database Files (*.db)")
+        if not file_path:
+            return
+        try:
+            import shutil
+            shutil.copy(self.db_path, file_path)
+            self.statusBar.showMessage(f"World saved successfully to '{file_path}'.")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to save world file: {e}")
+
+    def trigger_world_regeneration(self):
+        self.statusBar.showMessage("Chaining all Azgaar port layers sequentially...")
+        try:
+            self.map_engine.run_heightmap_pipeline()
+            self.map_engine.run_hydrology_rivers()
+            self.map_engine.run_biomes_climate(wind_angle_deg=45)
+            self.map_engine.run_cultures_generation()
+            self.map_engine.run_states_expansion()
+            self.map_engine.slice_state_provinces() 
+            self.map_engine.run_diplomacy_matrix_engine()
+            self.map_engine.run_religions_generation()
+            self.map_engine.run_burgs_generation()
+            self.map_engine.run_roads_pathfinding()
+            self.map_engine.run_trade_and_market_simulation()
+            self.map_engine.run_military_generator()
+            self.map_engine.run_production_goods()
+            self.map_engine.sink_generated_world_to_db(self.db_path)
+            self.load_map_data_to_viewer()
+            self.statusBar.showMessage("World regeneration committed successfully.")
+        except Exception as e:
+            QMessageBox.critical(self, "Pipeline Failure", f"Failed generation sequence: {e}")
+
+    def load_unresolved_inconsistencies(self):
+        self.inconsistency_list.clear()
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT description FROM inconsistencies WHERE status='Active'")
+            for row in cursor.fetchall():
+                self.inconsistency_list.addItem(row[0])
+            conn.close()
+        except:
+            pass
+
+    def handle_inconsistency_double_clicked(self, item):
+        self.ai_input.setText(f"Help me reconcile this lore error: {item.text()}")
+
+    def show_template_customizer(self):
+        dialog = TemplateDialog(self.template_mgr, self)
+        dialog.exec()
+
+    def setup_markers_db(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS note_map_bindings (
+                    note_id INTEGER,
+                    cell_idx INTEGER UNIQUE,
+                    FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
+                )
+            """)
+            conn.commit()
+            conn.close()
+        except:
+            pass
+
+    def setup_magic_db(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS magic_layers (
+                    cell_idx INTEGER PRIMARY KEY,
+                    magic_type TEXT NOT NULL
+                )
+            """)
+            conn.commit()
+            conn.close()
+        except:
+            pass
+
+    def import_external_note(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Import External Note", "", "Markdown Files (*.md);;Text Files (*.txt);;All Files (*)"
+        )
+        if not file_path:
+            return
+            
+        try:
+            title = os.path.splitext(os.path.basename(file_path))[0]
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                
+            self.note_title_input.setText(title)
+            self.note_editor.setPlainText(content)
+            self.save_current_note()
+            QMessageBox.information(self, "Import Successful", f"Note '{title}' imported and digested by Worldsmith AI.")
+        except Exception as e:
+            QMessageBox.critical(self, "Import Error", f"Failed to import file: {e}")
+
+    def change_magic_brush(self, brush_name):
+        self.map_viewer.active_paint_magic = brush_name
+
+    def handle_cell_painted(self, idx):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO magic_layers (cell_idx, magic_type)
+                VALUES (?, ?)
+                ON CONFLICT(cell_idx) DO UPDATE SET magic_type=excluded.magic_type
+            """, (idx, self.map_viewer.active_paint_magic))
+            conn.commit()
+            conn.close()
+            self.statusBar.showMessage(f"Painted Cell {idx} with {self.map_viewer.active_paint_magic}.")
+        except Exception as e:
+            self.statusBar.showMessage(f"Failed to save magic cell: {e}")
+
+    def handle_timeline_changed(self, day_val):
+        num_seasons = len(self.custom_seasons)
+        season_duration = self.custom_year_length / num_seasons
+        season_idx = min(int((day_val - 1) / season_duration), num_seasons - 1)
+        season = self.custom_seasons[season_idx]
+            
+        self.lbl_timeline.setText(f"<b>Calendar Timeline (Day {day_val} / {season})</b>")
+        self.celestial_widget.set_day(day_val)
+        
+        # Trigger celestial alignment magic flux modifier calculations
+        flux_mod = self.cosmos_engine.update_celestial_magic_flux(self.db_path, day_val)
+        if flux_mod > 1.0:
+            self.statusBar.showMessage(f"Celestial Alignment Active! Magic power multiplier is surged x{flux_mod}.")
+
+    def handle_cell_hovered(self, idx, elev, biome, state):
+        self.selected_cell_idx = idx
+        
+        bound_note_title = "None"
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT notes.title FROM notes 
+                JOIN note_map_bindings ON notes.id = note_map_bindings.note_id 
+                WHERE note_map_bindings.cell_idx = ?
+            """, (idx,))
+            row = cursor.fetchone()
+            if row:
+                bound_note_title = row[0]
+            conn.close()
+        except:
+            pass
+
+        troops = 0
+        for reg in self.map_engine.military_regiments:
+            if reg["cell_idx"] == idx:
+                troops = reg["total_troops"]
+                
+        cell = self.map_engine.cells[idx]
+        province = f"Province {cell['province']}" if cell["province"] > 0 else "None"
+        culture = f"Culture {cell['culture']}" if cell["culture"] > 0 else "None"
+        religion = f"Religion {cell['religion']}" if cell["religion"] > 0 else "None"
+        
+        self.statusBar.showMessage(
+            f"Cell ID: {idx} | Bound Note: {bound_note_title} | State: {state} | "
+            f"Prov: {province} | Cult: {culture} | Rel: {religion} | Troops: {troops}"
+        )
+        
+        # Enable opening of settlement map editor if double-clicking a cell containing a burg
+        if cell["burg"] > 0:
+            self.statusBar.showMessage(
+                f"Settlement: {burg['name'] if 'burg' in locals() else 'Burg'} | "
+                f"Double-click to open street layout map."
+            )
+
+    def mouseDoubleClickEvent(self, event):
+        if self.selected_cell_idx is not None:
+            cell = self.map_engine.cells[self.selected_cell_idx]
+            if cell["burg"] > 0:
+                burg = next((b for b in self.map_engine.burgs if b["id"] == cell["burg"]), None)
+                if burg:
+                    dialog = BurgMapDialog(burg, cell["h"], self)
+                    dialog.exec()
+
+    def bind_note_to_map_cell(self):
+        title = self.note_title_input.text().strip()
+        if not title:
+            QMessageBox.warning(self, "No Note", "Save or open a note first before binding it to a map cell.")
+            return
+        if self.selected_cell_idx is None:
+            QMessageBox.warning(self, "No Cell Hovered", "Hover over a map cell coordinate before binding.")
+            return
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT id FROM notes WHERE title=?", (title,))
+            row = cursor.fetchone()
+            if not row:
+                self.save_current_note()
+                cursor.execute("SELECT id FROM notes WHERE title=?", (title,))
+                row = cursor.fetchone()
+            
+            note_id = row[0]
+            
+            cursor.execute("""
+                INSERT INTO note_map_bindings (note_id, cell_idx) 
+                VALUES (?, ?)
+                ON CONFLICT(cell_idx) DO UPDATE SET note_id=excluded.note_id
+            """, (note_id, self.selected_cell_idx))
+            
+            conn.commit()
+            conn.close()
+            self.statusBar.showMessage(f"Successfully bound note '{title}' to Cell ID: {self.selected_cell_idx}.")
+        except Exception as e:
+            QMessageBox.critical(self, "Binding Error", f"Failed to bind note: {e}")
+
+    def load_map_data_to_viewer(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT cell_idx, magic_type FROM magic_layers")
+            for cell_idx, m_type in cursor.fetchall():
+                self.map_viewer.magic_data[cell_idx] = m_type
+            conn.close()
+        except:
+            pass
+
+        for cell in self.map_engine.cells:
+            cell_idx = cell["i"]
+            self.map_viewer.elevation_data[cell_idx] = cell["h"]
+            self.map_viewer.biomes_data[cell_idx] = cell["biome"]
+            
+            if cell["state"] > 0:
+                color_hex = "#7f1d1d"
+                for st in self.map_engine.states:
+                    if st["id"] == cell["state"]:
+                        color_hex = st["color"]
+                self.map_viewer.factions_data[cell_idx] = color_hex
+            else:
+                self.map_viewer.factions_data[cell_idx] = "#18181b"
+        self.map_viewer.update()
+
+    def trigger_welcome_prompt(self):
+        welcome_text = (
+            "<b>[System] Welcome to Worldsmith Sandbox!</b><br><br>"
+            "I am your co-author AI. Let's start at the beginning. "
+            "Tell me about the custom templates you've set up, or what kind of world rules we are building today."
+        )
+        self.ai_prompt_history.append(welcome_text)
+
+    def change_map_layer(self, layer_name):
+        self.map_viewer.layer_mode = layer_name
+        is_magic = (layer_name == "Magic Layer")
+        self.cb_magic_brush.setVisible(is_magic)
+        
+        # Load visibility checkbox
+        self.chk_layer_visibility.setChecked(self.map_viewer.visibility_map.get(layer_name, True))
+        self.map_viewer.update()
+
+    def handle_tag_found(self, tag_name):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag_name,))
+            conn.commit()
+            conn.close()
+        except:
+            pass
+
+    def handle_link_clicked(self, link_title):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT content FROM notes WHERE title=?", (link_title,))
+            row = cursor.fetchone()
+            conn.close()
+            
+            self.note_title_input.setText(link_title)
+            if row:
+                self.note_editor.setPlainText(row[0])
+                self.statusBar.showMessage(f"Loaded note '{link_title}'.")
+            else:
+                self.note_editor.setPlainText("")
+                self.statusBar.showMessage(f"Note '{link_title}' not found. Start typing to create it.")
+        except Exception as e:
+            self.statusBar.showMessage(f"Error opening link: {e}")
+
+    def send_ai_prompt(self):
+        user_text = self.ai_input.text().strip()
+        if not user_text:
+            return
+        
+        self.ai_prompt_history.append(f"<br><b>You:</b> {user_text}")
+        self.ai_input.clear()
+        
+        self.statusBar.showMessage("AI is thinking...")
+        self.btn_send_prompt.setEnabled(False)
+
+        # Start Async Worker Thread with dynamic db scan
+        self.ai_worker = OllamaPromptWorker(user_text, db_path=self.db_path)
+        self.ai_worker.response_received.connect(self.handle_ai_response)
+        self.ai_worker.error_occurred.connect(self.handle_ai_error)
+        self.ai_worker.start()
+
+    def handle_ai_response(self, text):
+        self.ai_prompt_history.append(f"<br><b>AI Assistant:</b> {text}<br>")
+        self.statusBar.showMessage("Response received.")
+        self.btn_send_prompt.setEnabled(True)
+
+    def handle_ai_error(self, err_msg):
+        self.ai_prompt_history.append(f"<br><font color='red'><b>[Error]:</b> Failed to communicate with local Ollama server ({err_msg}). Ensure Ollama is running (`ollama serve`).</font><br>")
+        self.statusBar.showMessage("AI communication error.")
+        self.btn_send_prompt.setEnabled(True)
+
+    def save_current_note(self):
+        title = self.note_title_input.text().strip()
+        content = self.note_editor.toPlainText().strip()
+        
+        if not title:
+            QMessageBox.warning(self, "Missing Title", "Please provide a title for the note.")
+            return
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO notes (title, content, updated_at) 
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(title) DO UPDATE SET content=excluded.content, updated_at=CURRENT_TIMESTAMP
+            """, (title, content))
+            conn.commit()
+            conn.close()
+            self.statusBar.showMessage(f"Note '{title}' saved successfully.")
+            
+            # Trigger asynchronous background lore consistency audit on save
+            self.statusBar.showMessage(f"Note '{title}' saved. Running lore audit...")
+            self.audit_worker = LoreAuditWorker(title, content, db_path=self.db_path)
+            self.audit_worker.audit_completed.connect(self.handle_audit_completed)
+            self.audit_worker.start()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Database Error", f"Failed to save note: {e}")
+
+    def handle_audit_completed(self, contradiction_summary):
+        if contradiction_summary:
+            warning_text = (
+                f"<br><font color='#ef4444'><b>[Lore Audit Inconsistency Detected]:</b></font><br>"
+                f"<i>{contradiction_summary}</i><br>"
+                f"<font color='#a7f3d0'>This issue has been logged to your anomalies database dashboard.</font><br>"
+            )
+            self.ai_prompt_history.append(warning_text)
+            self.statusBar.showMessage("Inconsistency found and logged!")
+            self.load_unresolved_inconsistencies()
+        else:
+            self.statusBar.showMessage("Lore audit complete. No inconsistencies detected.")
+
+    def compile_static_wiki(self):
+        compiler = WikiCompiler(self.db_path)
+        success, msg = compiler.compile_wiki()
+        if success:
+            QMessageBox.information(self, "Wiki Compiled", msg)
+        else:
+            QMessageBox.critical(self, "Compilation Error", f"Failed to compile wiki: {msg}")
+
+def main():
+    app = QApplication(sys.argv)
+    window = WorldsmithMainWindow()
+    window.show()
+    sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()

@@ -125,6 +125,7 @@ class AzgaarEngine:
         self.rivers = []
         self.roads = []
         self.military_regiments = []
+        self.zones = []
         
         self.name_gen = MarkovNameGenerator()
         self.generate_voronoi_mesh()
@@ -174,7 +175,8 @@ class AzgaarEngine:
                 "burg": 0,
                 "pop": 1.0,
                 "good": "None",
-                "is_aquatic": False
+                "is_aquatic": False,
+                "zone": 0
             })
 
     def run_heightmap_pipeline(self):
@@ -204,6 +206,37 @@ class AzgaarEngine:
             final_h = (noise_factor * 0.6) + (island_mask * 60.0)
             clamped_h = int(max(5, min(98, final_h)))
             cell["h"] = clamped_h
+
+    def apply_height_brush(self, center_idx, radius, tool_mode, intensity=5):
+        visited = {center_idx}
+        queue = [(center_idx, 0)]
+        affected = []
+        
+        # Gather cells in radius
+        while queue:
+            curr, dist = queue.pop(0)
+            affected.append((curr, dist))
+            if dist < radius - 1:
+                for n in self.get_neighbors(curr):
+                    if n not in visited:
+                        visited.add(n)
+                        queue.append((n, dist + 1))
+                        
+        if tool_mode == "Height Smooth":
+            original_heights = {cell_id: self.cells[cell_id]["h"] for cell_id, _ in affected}
+            for cell_id, _ in affected:
+                neighbors = self.get_neighbors(cell_id)
+                avg_h = sum(self.cells[n]["h"] for n in neighbors) / len(neighbors)
+                self.cells[cell_id]["h"] = int((original_heights[cell_id] + avg_h) / 2)
+        else:
+            for cell_id, dist in affected:
+                falloff = 1.0 - (dist / radius)
+                delta = intensity * falloff
+                
+                if tool_mode == "Height Raise":
+                    self.cells[cell_id]["h"] = min(99, int(self.cells[cell_id]["h"] + delta))
+                elif tool_mode == "Height Lower":
+                    self.cells[cell_id]["h"] = max(1, int(self.cells[cell_id]["h"] - delta))
 
     def run_hydrology_rivers(self):
         for cell in self.cells:
