@@ -711,6 +711,45 @@ class AzgaarEngine:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
+        # New tables for full world export
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS biomes (
+                cell_id INTEGER PRIMARY KEY,
+                biome TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS production_goods (
+                cell_id INTEGER PRIMARY KEY,
+                good TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS relief_icons (
+                cell_id INTEGER PRIMARY KEY,
+                icon_type TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS markers (
+                cell_id INTEGER PRIMARY KEY,
+                label TEXT,
+                data TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS emblems (
+                state_id INTEGER PRIMARY KEY,
+                svg BLOB
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ui_overlays (
+                layer TEXT PRIMARY KEY,
+                enabled INTEGER
+            )
+        """)
+
         try:
             cursor.execute("DELETE FROM magic_layers")
             cursor.execute("DELETE FROM cell_neighbors")
@@ -741,6 +780,23 @@ class AzgaarEngine:
                         VALUES (?, ?)
                     """, (cell["i"], n_id))
                     
+            # Insert biomes, goods, relief icons, markers per cell
+            for cell in self.cells:
+                # Biome
+                cursor.execute("INSERT OR REPLACE INTO biomes (cell_id, biome) VALUES (?, ?)", (cell["i"], cell.get("biome", "")))
+                # Production good
+                cursor.execute("INSERT OR REPLACE INTO production_goods (cell_id, good) VALUES (?, ?)", (cell["i"], cell.get("good", "")))
+                # Relief icons (mountain or forest)
+                icon_type = None
+                if cell.get("h", 0) >= 70:
+                    icon_type = "mountain"
+                elif "Forest" in cell.get("biome", "") or "Taiga" in cell.get("biome", ""):
+                    icon_type = "forest"
+                if icon_type:
+                    cursor.execute("INSERT OR REPLACE INTO relief_icons (cell_id, icon_type) VALUES (?, ?)", (cell["i"], icon_type))
+                # Markers – placeholder for future POIs (none by default)
+                # (If your engine stores markers elsewhere, replace this block accordingly)
+                pass
             for burg in self.burgs:
                 cursor.execute("""
                     INSERT INTO settlements (name, q, r, population, faction_id)

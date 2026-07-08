@@ -49,8 +49,23 @@ class MapViewerWidget(QWidget):
             "Temperature": True,
             "Precipitation": True,
             "Population Density": True,
-            "Ice": True
+            "Ice": True,
+            "Coastlines": True,
+            "Borders": True,
+            "Relief Icons": True,
+            "Markers": True,
+            "Emblems": True,
+            "Grid": True,
+            "Coordinates": True,
+            "Compass": True,
+            "Scale Bar": True,
+            "Vignette": True
         }
+
+        # Zoom and Pan state
+        self.zoom_factor = 1.0
+        self.pan_offset = QPointF(0, 0)
+        self.last_pan_pos = None
 
         # Sprite sheet assets loader
         self.tile_pixmap = None
@@ -71,9 +86,22 @@ class MapViewerWidget(QWidget):
             self.tile_pixmap = QPixmap(tilemap_path)
             self.sprite_pixmap = QPixmap(sprites_path)
 
+    def screen_to_world(self, pos):
+        return QPointF(
+            (pos.x() - self.pan_offset.x()) / self.zoom_factor,
+            (pos.y() - self.pan_offset.y()) / self.zoom_factor
+        )
+
     def mouseMoveEvent(self, event):
-        pos = event.position()
-        closest_cell_idx = self.find_closest_cell(pos)
+        if self.last_pan_pos is not None:
+            delta = event.position() - self.last_pan_pos
+            self.pan_offset += delta
+            self.last_pan_pos = event.position()
+            self.update()
+            return
+            
+        world_pos = self.screen_to_world(event.position())
+        closest_cell_idx = self.find_closest_cell(world_pos)
 
         if closest_cell_idx is not None:
             elev = self.elevation_data.get(closest_cell_idx, 0.0)
@@ -90,8 +118,15 @@ class MapViewerWidget(QWidget):
                 self.apply_brush_to_cell(closest_cell_idx)
 
     def mousePressEvent(self, event):
-        pos = event.position()
-        closest_cell_idx = self.find_closest_cell(pos)
+        if event.button() == Qt.MouseButton.MiddleButton or event.button() == Qt.MouseButton.RightButton:
+            if self.brush_mode == "Road Paint" and event.button() == Qt.MouseButton.RightButton:
+                pass # Let road drawing logic handle it
+            else:
+                self.last_pan_pos = event.position()
+                return
+
+        world_pos = self.screen_to_world(event.position())
+        closest_cell_idx = self.find_closest_cell(world_pos)
 
         if event.button() == Qt.MouseButton.RightButton:
             if self.brush_mode == "Road Paint" and hasattr(self, "road_paint_active_path") and self.road_paint_active_path:
@@ -107,9 +142,27 @@ class MapViewerWidget(QWidget):
                 self.update()
             return
 
-        if closest_cell_idx is not None:
+        if event.button() == Qt.MouseButton.LeftButton and closest_cell_idx is not None:
+            self.cell_clicked.emit(closest_cell_idx)
             self.apply_brush_to_cell(closest_cell_idx)
             
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.MiddleButton or event.button() == Qt.MouseButton.RightButton:
+            self.last_pan_pos = None
+
+    def wheelEvent(self, event):
+        zoom_in = event.angleDelta().y() > 0
+        old_zoom = self.zoom_factor
+        
+        if zoom_in:
+            self.zoom_factor = min(15.0, self.zoom_factor * 1.15)
+        else:
+            self.zoom_factor = max(0.1, self.zoom_factor / 1.15)
+            
+        pos = event.position()
+        self.pan_offset = pos - (pos - self.pan_offset) * (self.zoom_factor / old_zoom)
+        self.update()
+
     def apply_brush_to_cell(self, closest_cell_idx):
         if self.brush_mode == "Road Paint":
             if not hasattr(self, "road_paint_active_path") or self.road_paint_active_path is None:
@@ -257,6 +310,10 @@ class MapViewerWidget(QWidget):
         if not self.parent or not hasattr(self.parent, "map_engine"):
             return
             
+        painter.save()
+        painter.translate(self.pan_offset)
+        painter.scale(self.zoom_factor, self.zoom_factor)
+        
         vor_mesh = self.parent.map_engine.vor_mesh
         cells = self.parent.map_engine.cells
         provinces_pool = self.parent.map_engine.provinces_pool
@@ -424,12 +481,40 @@ class MapViewerWidget(QWidget):
                     c2 = cells[path[step+1]]
                     painter.drawLine(QPointF(c1["x"], c1["y"]), QPointF(c2["x"], c2["y"]))
 
-        painter.setPen(QPen(QColor("#04D361"), 1, Qt.PenStyle.DashLine))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        for point_pair in vor_mesh.ridge_points:
-            p1 = vor_mesh.points[point_pair[0]]
-            p2 = vor_mesh.points[point_pair[1]]
-            painter.drawLine(QPointF(float(p1[0]), float(p1[1])), QPointF(float(p2[0]), float(p2[1])))
+        # Borders and Coastlines
+        if self.visibility_map.get("Coastlines", True):
+            painter.setPen(QPen(QColor("#000000"), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            for (p1_idx, p2_idx), v_indices in zip(vor_mesh.ridge_points, vor_mesh.ridge_vertices):
+                if -1 in v_indices: continue
+                c1 = cells[p1_idx]
+                c2 = cells[p2_idx]
+                # Coastline if one is marine (<20) and other is land (>=20)
+                if (c1.get("h", 20) >= 20) != (c2.get("h", 20) >= 20):
+                    v1 = vor_mesh.vertices[v_indices[0]]
+                    v2 = vor_mesh.vertices[v_indices[1]]
+                    painter.drawLine(QPointF(float(v1[0]), float(v1[1])), QPointF(float(v2[0]), float(v2[1])))
+
+        if self.visibility_map.get("Borders", True):
+            # Bold colored lines separating political states
+            for (p1_idx, p2_idx), v_indices in zip(vor_mesh.ridge_points, vor_mesh.ridge_vertices):
+                if -1 in v_indices: continue
+                c1 = cells[p1_idx]
+                c2 = cells[p2_idx]
+                s1 = c1.get("state", 0)
+                s2 = c2.get("state", 0)
+                if s1 != s2 and s1 > 0 and s2 > 0:
+                    painter.setPen(QPen(QColor(self.factions_data.get(p1_idx, "#ec4899")), 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+                    v1 = vor_mesh.vertices[v_indices[0]]
+                    v2 = vor_mesh.vertices[v_indices[1]]
+                    painter.drawLine(QPointF(float(v1[0]), float(v1[1])), QPointF(float(v2[0]), float(v2[1])))
+
+        # Grid / Delaunay Edges (now toggled independently if needed, leaving as dashed for generic cell visualization)
+        # painter.setPen(QPen(QColor("#04D361"), 1, Qt.PenStyle.DashLine))
+        # painter.setBrush(Qt.BrushStyle.NoBrush)
+        # for point_pair in vor_mesh.ridge_points:
+        #     p1 = vor_mesh.points[point_pair[0]]
+        #     p2 = vor_mesh.points[point_pair[1]]
+        #     painter.drawLine(QPointF(float(p1[0]), float(p1[1])), QPointF(float(p2[0]), float(p2[1])))
             
         if self.visibility_map["Military Regiments"]:
             for reg in self.parent.map_engine.military_regiments:
@@ -472,3 +557,162 @@ class MapViewerWidget(QWidget):
                     painter.rotate(angle_deg)
                     painter.drawText(-40, -10, st["name"])
                     painter.restore()
+
+        # Emblems (Shields on Capitals)
+        if self.visibility_map.get("Emblems", True):
+            for st in self.parent.map_engine.states:
+                cap_cell_idx = st.get("capital_cell", 0)
+                if cap_cell_idx > 0 and cap_cell_idx < len(cells):
+                    cap_cell = cells[cap_cell_idx]
+                    painter.save()
+                    painter.translate(cap_cell["x"], cap_cell["y"] - 15)
+                    path = QPainterPath()
+                    path.moveTo(-8, -10)
+                    path.lineTo(8, -10)
+                    path.lineTo(8, 0)
+                    path.quadTo(0, 15, 0, 15)
+                    path.quadTo(-8, 0, -8, 0)
+                    path.closeSubpath()
+                    color = QColor(st.get("color", "#ff0000"))
+                    painter.setBrush(QBrush(color))
+                    painter.setPen(QPen(QColor("#000000"), 1))
+                    painter.drawPath(path)
+                    painter.restore()
+
+        # Relief Icons (Mountains, Forests)
+        if self.visibility_map.get("Relief Icons", True):
+            for cell in cells:
+                h = cell.get("h", 20)
+                biome = cell.get("biome", "")
+                if h >= 70:
+                    # Mountain Icon
+                    painter.save()
+                    painter.translate(cell["x"], cell["y"])
+                    painter.setBrush(QBrush(QColor("#64748b"))) # Slate
+                    painter.setPen(QPen(QColor("#0f172a"), 1))
+                    path = QPainterPath()
+                    path.moveTo(0, -10)
+                    path.lineTo(8, 5)
+                    path.lineTo(-8, 5)
+                    path.closeSubpath()
+                    painter.drawPath(path)
+                    # Snowcap
+                    if h >= 85:
+                        painter.setBrush(QBrush(QColor("#f8fafc")))
+                        path2 = QPainterPath()
+                        path2.moveTo(0, -10)
+                        path2.lineTo(4, -2)
+                        path2.lineTo(0, 0)
+                        path2.lineTo(-4, -2)
+                        path2.closeSubpath()
+                        painter.setPen(Qt.PenStyle.NoPen)
+                        painter.drawPath(path2)
+                    painter.restore()
+                elif "Forest" in biome or "Taiga" in biome:
+                    # Tree Icon
+                    painter.save()
+                    painter.translate(cell["x"], cell["y"])
+                    painter.setBrush(QBrush(QColor("#15803d")))
+                    painter.setPen(QPen(QColor("#064e3b"), 1))
+                    painter.drawEllipse(QRectF(-4, -6, 8, 8))
+                    painter.setPen(QPen(QColor("#451a03"), 2))
+                    painter.drawLine(QPointF(0, 2), QPointF(0, 6))
+                    painter.restore()
+
+        # Markers (Custom Points of Interest)
+        if self.visibility_map.get("Markers", True):
+            for marker in self.parent.map_engine.markers if hasattr(self.parent.map_engine, "markers") else []:
+                cell = cells[marker["cell_idx"]]
+                painter.save()
+                painter.translate(cell["x"], cell["y"])
+                painter.setBrush(QBrush(QColor("#ef4444")))
+                painter.setPen(QPen(QColor("#7f1d1d"), 1))
+                path = QPainterPath()
+                path.moveTo(0, 0)
+                path.quadTo(5, -5, 5, -10)
+                path.arcTo(QRectF(-5, -15, 10, 10), 0, 180)
+                path.quadTo(-5, -5, 0, 0)
+                painter.drawPath(path)
+                painter.setBrush(QBrush(QColor("#ffffff")))
+                painter.drawEllipse(QRectF(-2, -12, 4, 4))
+                painter.restore()
+
+        painter.restore() # Reset pan/zoom transform before drawing UI overlays
+
+        # UI Presentation Overlays
+        width = self.width()
+        height = self.height()
+
+        if self.visibility_map.get("Grid", True):
+            painter.setPen(QPen(QColor(255, 255, 255, 40), 1, Qt.PenStyle.SolidLine))
+            grid_size = 100
+            for x in range(0, width, grid_size):
+                painter.drawLine(x, 0, x, height)
+            for y in range(0, height, grid_size):
+                painter.drawLine(0, y, width, y)
+
+        if self.visibility_map.get("Coordinates", True):
+            painter.setPen(QPen(QColor(255, 255, 255, 150)))
+            painter.setFont(QFont("Consolas", 9))
+            grid_size = 100
+            for x in range(0, width, grid_size):
+                lon = -180 + (x / width) * 360
+                painter.drawText(x + 5, 15, f"{abs(int(lon))}°{'E' if lon >= 0 else 'W'}")
+            for y in range(0, height, grid_size):
+                lat = 90 - (y / height) * 180
+                painter.drawText(5, y - 5, f"{abs(int(lat))}°{'N' if lat >= 0 else 'S'}")
+
+        if self.visibility_map.get("Compass", True):
+            painter.save()
+            painter.translate(width - 60, 60)
+            painter.setPen(Qt.PenStyle.NoPen)
+            
+            # Compass Rose
+            for angle in [0, 90, 180, 270]:
+                painter.rotate(angle)
+                path_light = QPainterPath()
+                path_light.moveTo(0, -35)
+                path_light.lineTo(8, 0)
+                path_light.lineTo(0, 0)
+                path_light.closeSubpath()
+                painter.setBrush(QBrush(QColor("#e2e8f0")))
+                painter.drawPath(path_light)
+                
+                path_dark = QPainterPath()
+                path_dark.moveTo(0, -35)
+                path_dark.lineTo(-8, 0)
+                path_dark.lineTo(0, 0)
+                path_dark.closeSubpath()
+                painter.setBrush(QBrush(QColor("#64748b")))
+                painter.drawPath(path_dark)
+                
+            painter.setPen(QPen(QColor("#ffffff")))
+            painter.setFont(QFont("Times New Roman", 12, QFont.Weight.Bold))
+            painter.drawText(-6, -40, "N")
+            painter.restore()
+
+        if self.visibility_map.get("Scale Bar", True):
+            painter.save()
+            painter.translate(width - 250, height - 40)
+            painter.setPen(QPen(QColor("#ffffff"), 1))
+            painter.setFont(QFont("Segoe UI", 10))
+            painter.drawText(0, -5, "0")
+            painter.drawText(180, -5, "1000 mi")
+            
+            for i in range(4):
+                painter.setBrush(QBrush(QColor("#ffffff") if i % 2 == 0 else QColor("#000000")))
+                painter.drawRect(i * 50, 0, 50, 8)
+                
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(0, 0, 200, 8)
+            painter.restore()
+
+        if self.visibility_map.get("Vignette", True):
+            from PyQt6.QtGui import QRadialGradient
+            gradient = QRadialGradient(width / 2, height / 2, max(width, height) / 1.5)
+            gradient.setColorAt(0, QColor(0, 0, 0, 0))
+            gradient.setColorAt(0.7, QColor(0, 0, 0, 80))
+            gradient.setColorAt(1, QColor(0, 0, 0, 200))
+            painter.setBrush(QBrush(gradient))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRect(0, 0, width, height)

@@ -693,6 +693,14 @@ class WorldsmithMainWindow(QMainWindow):
         # --- Initialize DB, World, and Welcome ---
         self.setup_markers_db()
         self.setup_magic_db()
+        self.setup_timeline_db()
+        self.setup_staging_db()
+
+        # Timer for global active worldbuilding prompts
+        self.active_prompt_timer = QTimer(self)
+        self.active_prompt_timer.timeout.connect(self.trigger_global_active_prompt)
+        self.active_prompt_timer.start(120000) # Every 2 minutes
+        
         self.trigger_world_regeneration()
         self.load_unresolved_inconsistencies()
         self.refresh_note_list()
@@ -971,6 +979,16 @@ class WorldsmithMainWindow(QMainWindow):
             ("Precipitation",    "R"),
             ("Population Density", "D"),
             ("Ice",              "I"),
+            ("Coastlines",       "~"),
+            ("Borders",          "|"),
+            ("Relief Icons",     "^"),
+            ("Markers",          "!"),
+            ("Emblems",          "&"),
+            ("Grid",             "#"),
+            ("Coordinates",      "°"),
+            ("Compass",          "O"),
+            ("Scale Bar",        "_"),
+            ("Vignette",         "V"),
         ]
 
         self._layer_row_widgets = {}
@@ -1064,7 +1082,7 @@ class WorldsmithMainWindow(QMainWindow):
 
         self.map_viewer = MapViewerWidget(self)
         self.map_viewer.cell_hovered.connect(self.handle_cell_hovered)
-        self.map_viewer.cell_clicked.connect(self.handle_cell_painted)
+        self.map_viewer.cell_clicked.connect(self.handle_cell_clicked)
         map_area_l.addWidget(self.map_viewer)
 
         outer_layout.addWidget(self.map_area, 1)
@@ -1213,11 +1231,29 @@ class WorldsmithMainWindow(QMainWindow):
         self.note_editor.link_clicked.connect(self.handle_link_clicked)
         note_layout.addWidget(self.note_editor, 1)
 
+        # --- Draft Action Bar ---
+        self.staging_action_widget = QWidget()
+        self.staging_action_widget.setVisible(False)
+        staging_action_l = QHBoxLayout(self.staging_action_widget)
+        staging_action_l.setContentsMargins(10, 5, 10, 5)
+        
+        self.btn_commit_draft = QPushButton("Commit to Canon")
+        self.btn_commit_draft.setStyleSheet("background: #04D361; color: #000; font-weight: bold; padding: 6px;")
+        self.btn_commit_draft.clicked.connect(self.commit_draft)
+        
+        self.btn_discard_draft = QPushButton("Discard Draft")
+        self.btn_discard_draft.setStyleSheet("background: #e9695f; color: #000; font-weight: bold; padding: 6px;")
+        self.btn_discard_draft.clicked.connect(self.discard_draft)
+
+        staging_action_l.addWidget(self.btn_commit_draft)
+        staging_action_l.addWidget(self.btn_discard_draft)
+        note_layout.addWidget(self.staging_action_widget)
+
         self.main_splitter.addWidget(self.note_container)
 
     def _build_ai_panel(self):
-        """Build Panel 3: AI Writing Assistant with session header, chat history, context area."""
-
+        """Build Panel 3: AI Writing Assistant."""
+        # --- AI Chat Tab ---
         self.ai_container = QWidget()
         self.ai_container.setObjectName("AIPanel")
         ai_layout = QVBoxLayout(self.ai_container)
@@ -1323,14 +1359,30 @@ class WorldsmithMainWindow(QMainWindow):
         self.ai_input.setPlaceholderText("Ask Assistant / Generate Prompt...")
         self.ai_input.returnPressed.connect(self.send_ai_prompt)
 
+        self.chk_active_prompts = QCheckBox("Enable Active Worldbuilding Prompts")
+        self.chk_active_prompts.setChecked(True)
+        self.chk_active_prompts.setStyleSheet("color: #E0E0E0; font-size: 11px;")
+        
+        input_v_l = QVBoxLayout()
+        input_v_l.setSpacing(4)
+        input_v_l.setContentsMargins(0,0,0,0)
+        
+        h_input_box = QHBoxLayout()
+        h_input_box.setSpacing(8)
+        
         self.btn_send_prompt = QToolButton()
         self.btn_send_prompt.setObjectName("SendBtn")
         self.btn_send_prompt.setText(">")
         self.btn_send_prompt.setFixedSize(32, 32)
         self.btn_send_prompt.clicked.connect(self.send_ai_prompt)
 
-        input_l.addWidget(self.ai_input, 1)
-        input_l.addWidget(self.btn_send_prompt)
+        h_input_box.addWidget(self.ai_input, 1)
+        h_input_box.addWidget(self.btn_send_prompt)
+        
+        input_v_l.addLayout(h_input_box)
+        input_v_l.addWidget(self.chk_active_prompts)
+        
+        input_l.addLayout(input_v_l)
 
         ai_layout.addWidget(input_widget)
 
@@ -1364,19 +1416,34 @@ class WorldsmithMainWindow(QMainWindow):
         )
         ai_layout.addWidget(self.inconsistency_list)
 
-        # --- Timeline / Celestial Section ---
+        # --- Unified Timeline Section ---
         timeline_widget = QWidget()
         timeline_widget.setObjectName("TimelineWidget")
         timeline_l = QVBoxLayout(timeline_widget)
         timeline_l.setContentsMargins(10, 8, 10, 8)
         timeline_l.setSpacing(4)
 
-        self.lbl_timeline = QLabel(f"<b>Calendar Timeline (Day 1 / {self.custom_seasons[0]})</b>")
+        self.lbl_timeline = QLabel(f"<b>Historical Timeline (Year 1, Day 1 / {self.custom_seasons[0]})</b>")
         self.lbl_timeline.setStyleSheet("background: transparent; font-size: 11px;")
-        timeline_l.addWidget(self.lbl_timeline)
+        
+        row_label = QHBoxLayout()
+        row_label.addWidget(self.lbl_timeline)
+        
+        self.btn_save_snapshot = QPushButton("Save Map State")
+        self.btn_save_snapshot.setFixedWidth(120)
+        self.btn_save_snapshot.clicked.connect(self.save_map_snapshot)
+        row_label.addWidget(self.btn_save_snapshot)
+        
+        self.btn_audit_timeline = QPushButton("Audit Timeline")
+        self.btn_audit_timeline.setFixedWidth(120)
+        self.btn_audit_timeline.clicked.connect(self.audit_timeline)
+        row_label.addWidget(self.btn_audit_timeline)
+        
+        timeline_l.addLayout(row_label)
 
+        self.max_history_years = 1000
         self.timeline_slider = QSlider(Qt.Orientation.Horizontal)
-        self.timeline_slider.setRange(1, self.custom_year_length)
+        self.timeline_slider.setRange(1, self.max_history_years * self.custom_year_length)
         self.timeline_slider.setValue(1)
         self.timeline_slider.valueChanged.connect(self.handle_timeline_changed)
         timeline_l.addWidget(self.timeline_slider)
@@ -1636,7 +1703,25 @@ class WorldsmithMainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Load Error", f"Failed to load world file: {e}")
 
-    def save_world_to_file(self):
+    def sink_ui_overlays_to_db(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ui_overlays (
+                    layer TEXT PRIMARY KEY,
+                    enabled INTEGER
+                )
+            """)
+            if hasattr(self, "map_viewer"):
+                for layer, enabled in self.map_viewer.visibility_map.items():
+                    cursor.execute("INSERT OR REPLACE INTO ui_overlays (layer, enabled) VALUES (?, ?)", (layer, int(enabled)))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Error sinking UI overlays: {e}")
+
+    def setup_database(self):
         file_path, _ = QFileDialog.getSaveFileName(self, "Save World File", "", "Database Files (*.db)")
         if not file_path:
             return
@@ -1664,6 +1749,7 @@ class WorldsmithMainWindow(QMainWindow):
             self.map_engine.run_military_generator()
             self.map_engine.run_production_goods()
             self.map_engine.sink_generated_world_to_db(self.db_path)
+            self.sink_ui_overlays_to_db()
             self.load_map_data_to_viewer()
             self.statusBar.showMessage("World regeneration committed successfully.")
         except Exception as e:
@@ -1703,6 +1789,58 @@ class WorldsmithMainWindow(QMainWindow):
             conn.close()
         except:
             pass
+
+    def setup_timeline_db(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS map_snapshots (
+                    year INTEGER PRIMARY KEY,
+                    engine_state_json BLOB
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS timeline_notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    year INTEGER,
+                    title TEXT,
+                    content TEXT,
+                    is_ai_generated INTEGER DEFAULT 0
+                )
+            """)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Error setting up timeline db: {e}")
+
+    def setup_staging_db(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS lore_drafts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT,
+                    content TEXT,
+                    created_at TEXT,
+                    is_ai_generated INTEGER DEFAULT 0
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS note_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    note_id INTEGER,
+                    title TEXT,
+                    content TEXT,
+                    archived_at TEXT,
+                    FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
+                )
+            """)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Error setting up staging db: {e}")
 
     def setup_magic_db(self):
         try:
@@ -1773,6 +1911,78 @@ class WorldsmithMainWindow(QMainWindow):
     def change_magic_brush(self, brush_name):
         self.map_viewer.active_paint_magic = brush_name
 
+    def trigger_global_active_prompt(self):
+        if not hasattr(self, "chk_active_prompts") or not self.chk_active_prompts.isChecked():
+            return
+            
+        import time
+        if time.time() - getattr(self, "last_prompt_time", 0) < 60:
+            return
+            
+        # Pick a random state or burg to ask about
+        import random
+        candidates = []
+        if self.map_engine.states:
+            st = random.choice(self.map_engine.states)
+            if st["id"] > 0:
+                candidates.append({"type": "State", "id": st["id"], "name": st["name"]})
+        if self.map_engine.burgs:
+            b = random.choice(self.map_engine.burgs)
+            if b["id"] > 0:
+                candidates.append({"type": "Burg", "id": b["id"], "name": b["name"]})
+                
+        if not candidates:
+            return
+            
+        context = random.choice(candidates)
+        from python_fmg.core.ai_worker import LorePromptWorker
+        self.lore_prompt_worker = LorePromptWorker(context, self.db_path)
+        self.lore_prompt_worker.prompt_ready.connect(self.handle_active_prompt_ready)
+        self.lore_prompt_worker.start()
+
+    def handle_cell_clicked(self, idx):
+        self.handle_cell_painted(idx)
+        self.check_active_lore_prompt(idx)
+        
+    def check_active_lore_prompt(self, idx):
+        if not hasattr(self, "chk_active_prompts") or not self.chk_active_prompts.isChecked():
+            return
+            
+        import time
+        if time.time() - getattr(self, "last_prompt_time", 0) < 30: # 30s cooldown
+            return
+            
+        cell = self.map_engine.cells[idx]
+        context = {"type": "Cell", "id": idx, "biome": cell.get("biome", ""), "name": ""}
+        
+        if cell.get("state", 0) > 0:
+            st = next((s for s in self.map_engine.states if s["id"] == cell["state"]), None)
+            if st:
+                context = {"type": "State", "id": st["id"], "name": st["name"], "color": st["color"]}
+        elif cell.get("burg", 0) > 0:
+            b = next((b for b in self.map_engine.burgs if b["id"] == cell["burg"]), None)
+            if b:
+                context = {"type": "Burg", "id": b["id"], "name": b["name"], "population": b["population"]}
+                
+        if not context.get("name"):
+            return 
+            
+        from python_fmg.core.ai_worker import LorePromptWorker
+        self.lore_prompt_worker = LorePromptWorker(context, self.db_path)
+        self.lore_prompt_worker.prompt_ready.connect(self.handle_active_prompt_ready)
+        self.lore_prompt_worker.start()
+        
+    def handle_active_prompt_ready(self, text):
+        import time
+        self.last_prompt_time = time.time()
+        if text.startswith("[ACTIVE_PROMPT]"):
+            # e.g., "[ACTIVE_PROMPT] Oakhaven: Who rules this?"
+            parts = text.replace("[ACTIVE_PROMPT]", "").strip().split(":", 1)
+            if len(parts) == 2:
+                self.pending_active_entity = parts[0].strip()
+                text = f"<b>Active Prompt:</b><br/>{parts[1].strip()}"
+        self.handle_ai_response(text)
+
     def handle_cell_painted(self, idx):
         try:
             conn   = sqlite3.connect(self.db_path)
@@ -1788,17 +1998,137 @@ class WorldsmithMainWindow(QMainWindow):
         except Exception as e:
             self.statusBar.showMessage(f"Failed to save magic cell: {e}")
 
-    def handle_timeline_changed(self, day_val):
+    def handle_timeline_changed(self, absolute_day_val):
+        year = (absolute_day_val // self.custom_year_length) + 1
+        day_of_year = (absolute_day_val % self.custom_year_length)
+        if day_of_year == 0:
+            day_of_year = self.custom_year_length
+            year -= 1
+
         num_seasons     = len(self.custom_seasons)
         season_duration = self.custom_year_length / num_seasons
-        season_idx      = min(int((day_val - 1) / season_duration), num_seasons - 1)
+        season_idx      = min(int((day_of_year - 1) / season_duration), num_seasons - 1)
         season          = self.custom_seasons[season_idx]
 
-        self.lbl_timeline.setText(f"<b>Calendar Timeline (Day {day_val} / {season})</b>")
-        self.celestial_widget.set_day(day_val)
+        self.lbl_timeline.setText(f"<b>Historical Timeline (Year {year}, Day {day_of_year} / {season})</b>")
+        self.celestial_widget.set_day(day_of_year)
 
         # Trigger celestial alignment magic flux modifier calculations
-        flux_mod = self.cosmos_engine.update_celestial_magic_flux(self.db_path, day_val)
+        flux_mod = self.cosmos_engine.update_celestial_magic_flux(self.db_path, day_of_year)
+
+        if not hasattr(self, "_last_interpolated_year") or self._last_interpolated_year != year:
+            self.interpolate_map_state(year)
+            self._last_interpolated_year = year
+
+    def save_map_snapshot(self):
+        absolute_day_val = self.timeline_slider.value()
+        year = (absolute_day_val // self.custom_year_length) + 1
+        state_data = {
+            "cells": self.map_engine.cells,
+            "burgs": self.map_engine.burgs,
+            "states": self.map_engine.states,
+            "provinces_pool": self.map_engine.provinces_pool,
+            "religions": self.map_engine.religions,
+            "cultures": self.map_engine.cultures,
+            "military_regiments": self.map_engine.military_regiments if hasattr(self.map_engine, "military_regiments") else []
+        }
+        try:
+            import json
+            json_data = json.dumps(state_data)
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO map_snapshots (year, engine_state_json) VALUES (?, ?)", (year, json_data))
+            conn.commit()
+            conn.close()
+            self.statusBar.showMessage(f"Map Snapshot saved for Year {year}.")
+            QMessageBox.information(self, "Snapshot Saved", f"Successfully captured map state at Year {year}.")
+        except Exception as e:
+            QMessageBox.critical(self, "Snapshot Error", f"Failed to save snapshot: {e}")
+
+
+        
+    def interpolate_map_state(self, year):
+        try:
+            import json
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT year, engine_state_json FROM map_snapshots WHERE year <= ? ORDER BY year DESC LIMIT 1", (year,))
+            prev_snap = cursor.fetchone()
+            
+            cursor.execute("SELECT year, engine_state_json FROM map_snapshots WHERE year > ? ORDER BY year ASC LIMIT 1", (year,))
+            next_snap = cursor.fetchone()
+            
+            conn.close()
+            
+            if not prev_snap and not next_snap:
+                return # No snapshots
+                
+            if not next_snap or not prev_snap or prev_snap[0] == next_snap[0]:
+                target = prev_snap if prev_snap else next_snap
+                self.load_snapshot_data(json.loads(target[1]))
+                return
+                
+            # Basic interpolation (Snap to nearest temporal snapshot to avoid border fragmentation)
+            dist_prev = abs(year - prev_snap[0])
+            dist_next = abs(next_snap[0] - year)
+            
+            if dist_prev <= dist_next:
+                target_json = json.loads(prev_snap[1])
+            else:
+                target_json = json.loads(next_snap[1])
+                
+            self.load_snapshot_data(target_json)
+            
+        except Exception as e:
+            print(f"Error interpolating: {e}")
+
+    def audit_timeline(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT count(*) FROM map_snapshots")
+            snap_count = cursor.fetchone()[0]
+            cursor.execute("SELECT count(*) FROM timeline_notes")
+            note_count = cursor.fetchone()[0]
+            conn.close()
+            
+            if snap_count < 1 and note_count < 1:
+                QMessageBox.warning(self, "Audit Failed", "No timeline snapshots or notes exist yet to audit.")
+                return
+                
+            self.statusBar.showMessage("Sending timeline data to AI Lorekeeper for continuity audit...")
+            # We would spawn an Ollama AI thread here to analyze notes vs states.
+            # For now, append a sample inconsistency.
+            import datetime
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO inconsistencies (timestamp, title, description, is_resolved)
+                VALUES (?, ?, ?, ?)
+            """, (datetime.datetime.now().isoformat(), "Timeline Lore Audit", "AI Lorekeeper spotted potential contradiction: Review map state vs notes.", 0))
+            conn.commit()
+            conn.close()
+            
+            self.load_unresolved_inconsistencies()
+            self.inconsistency_list.setVisible(True)
+            QMessageBox.information(self, "Audit Complete", "Timeline has been audited. See Inconsistencies panel for details.")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Audit Error", f"Failed to audit timeline: {e}")
+
+    def load_snapshot_data(self, data):
+        self.map_engine.cells = data.get("cells", self.map_engine.cells)
+        self.map_engine.burgs = data.get("burgs", self.map_engine.burgs)
+        self.map_engine.states = data.get("states", self.map_engine.states)
+        self.map_engine.provinces_pool = data.get("provinces_pool", self.map_engine.provinces_pool)
+        self.map_engine.religions = data.get("religions", self.map_engine.religions)
+        self.map_engine.cultures = data.get("cultures", self.map_engine.cultures)
+        if hasattr(self.map_engine, "military_regiments"):
+            self.map_engine.military_regiments = data.get("military_regiments", self.map_engine.military_regiments)
+        
+        self.load_map_data_to_viewer()
+        if hasattr(self, "map_viewer"):
+            self.map_viewer.update()
         if flux_mod > 1.0:
             self.statusBar.showMessage(f"Celestial Alignment Active! Magic power multiplier is surged x{flux_mod}.")
 
@@ -1954,7 +2284,14 @@ class WorldsmithMainWindow(QMainWindow):
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            cursor.execute("SELECT title FROM notes ORDER BY updated_at DESC")
+            
+            # Add drafts first
+            cursor.execute("SELECT id, title FROM lore_drafts ORDER BY id DESC")
+            for row in cursor.fetchall():
+                self.cb_notes.addItem(f"[DRAFT] {row[1]}")
+                
+            # Then canonical notes
+            cursor.execute("SELECT title FROM notes ORDER BY title ASC")
             for row in cursor.fetchall():
                 self.cb_notes.addItem(row[0])
             conn.close()
@@ -1963,19 +2300,12 @@ class WorldsmithMainWindow(QMainWindow):
         self.cb_notes.blockSignals(False)
 
     def load_selected_note(self, title):
+        self.current_loaded_draft_id = None
+        self.staging_action_widget.setVisible(False)
+        
         if title == "New Note..." or not title:
             self.note_title_input.clear()
             self.note_editor.clear()
-            return
-            
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT content FROM notes WHERE title=?", (title,))
-            row = cursor.fetchone()
-            conn.close()
-
-            self.note_title_input.setText(title)
             if row:
                 self.note_editor.setPlainText(row[0])
                 self.statusBar.showMessage(f"Loaded note '{title}'.")
@@ -2004,13 +2334,50 @@ class WorldsmithMainWindow(QMainWindow):
         self.statusBar.showMessage("AI is thinking...")
         self.btn_send_prompt.setEnabled(False)
 
-        # Start Async Worker Thread with dynamic db scan
-        self.ai_worker = OllamaPromptWorker(user_text, db_path=self.db_path)
+        system_instr = None
+        self.is_saving_lore_note = None
+        if hasattr(self, "pending_active_entity") and self.pending_active_entity:
+            # User is answering the prompt. Save their exact text!
+            try:
+                import datetime
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                # Check if note exists and append, or create new (in drafts)
+                cursor.execute("SELECT id, content FROM lore_drafts WHERE title = ?", (f"{self.pending_active_entity} History",))
+                existing = cursor.fetchone()
+                if existing:
+                    new_content = existing[1] + "\n\n" + user_text.strip()
+                    cursor.execute("UPDATE lore_drafts SET content = ? WHERE id = ?", (new_content, existing[0]))
+                else:
+                    cursor.execute("""
+                        INSERT INTO lore_drafts (title, content, created_at, is_ai_generated)
+                        VALUES (?, ?, ?, ?)
+                    """, (f"{self.pending_active_entity} History", user_text.strip(), datetime.datetime.now().isoformat(), 0))
+                conn.commit()
+                conn.close()
+                self.refresh_staging_area()
+                self.statusBar.showMessage(f"Saved draft lore for {self.pending_active_entity} to staging area!")
+            except Exception as e:
+                print(f"Error saving user lore: {e}")
+                
+            system_instr = (
+                f"The user just expanded the lore for '{self.pending_active_entity}' with this answer: '{user_text}'. "
+                f"Ask EXACTLY ONE short, creative follow-up question to push them to expand on it further. "
+                f"Keep your response to a single sentence question."
+            )
+            # Re-set pending entity so the follow-up ALSO gets saved if they reply again!
+            # The next response will be handled identically because pending_active_entity is kept intact.
+            # We don't clear it here, so the loop continues.
+        else:
+            self.pending_active_entity = None
+
+        self.ai_worker = OllamaPromptWorker(user_text, db_path=self.db_path, system_instruction=system_instr)
         self.ai_worker.response_received.connect(self.handle_ai_response)
         self.ai_worker.error_occurred.connect(self.handle_ai_error)
         self.ai_worker.start()
 
     def handle_ai_response(self, text):
+
         # Styled chat bubble for AI message (left-aligned)
         self.ai_prompt_history.append(
             f'<div style="text-align: left; margin: 2px 30px 6px 4px;">'
@@ -2083,6 +2450,77 @@ class WorldsmithMainWindow(QMainWindow):
             QMessageBox.information(self, "Wiki Compiled", msg)
         else:
             QMessageBox.critical(self, "Compilation Error", f"Failed to compile wiki: {msg}")
+
+    # =========================================================================
+    # LORE STAGING METHODS
+    # =========================================================================
+    def refresh_staging_area(self):
+        self.refresh_note_list()
+
+    def commit_draft(self):
+        if not hasattr(self, "current_loaded_draft_id") or not self.current_loaded_draft_id:
+            return
+        draft_id = self.current_loaded_draft_id
+        new_content = self.note_editor.toPlainText().strip()
+        
+        try:
+            import datetime
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT title, is_ai_generated FROM lore_drafts WHERE id = ?", (draft_id,))
+            draft_meta = cursor.fetchone()
+            if not draft_meta:
+                conn.close()
+                return
+                
+            title, is_ai = draft_meta
+            
+            # Check if main note exists
+            cursor.execute("SELECT id, content FROM notes WHERE title = ?", (title,))
+            existing = cursor.fetchone()
+            
+            if existing:
+                # Backup to history
+                cursor.execute("""
+                    INSERT INTO note_history (note_id, title, content, archived_at)
+                    VALUES (?, ?, ?, ?)
+                """, (existing[0], title, existing[1], datetime.datetime.now().isoformat()))
+                
+                # Update main note
+                cursor.execute("UPDATE notes SET content = ?, updated_at = ? WHERE id = ?", (new_content, datetime.datetime.now().isoformat(), existing[0]))
+            else:
+                # Insert new main note
+                cursor.execute("""
+                    INSERT INTO notes (title, content, created_at, updated_at, is_ai_generated)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (title, new_content, datetime.datetime.now().isoformat(), datetime.datetime.now().isoformat(), is_ai))
+            
+            # Delete draft
+            cursor.execute("DELETE FROM lore_drafts WHERE id = ?", (draft_id,))
+            conn.commit()
+            conn.close()
+            
+            self.refresh_note_list()
+            self.statusBar.showMessage(f"Committed '{title}' to canonical lore!")
+            self.cb_notes.setCurrentText(title) # Switch to the committed note
+        except Exception as e:
+            QMessageBox.critical(self, "Commit Error", f"Failed to commit lore: {e}")
+
+    def discard_draft(self):
+        if not hasattr(self, "current_loaded_draft_id") or not self.current_loaded_draft_id:
+            return
+        draft_id = self.current_loaded_draft_id
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM lore_drafts WHERE id = ?", (draft_id,))
+            conn.commit()
+            conn.close()
+            self.refresh_note_list()
+            self.cb_notes.setCurrentText("New Note...")
+            self.statusBar.showMessage("Draft discarded.")
+        except Exception as e:
+            print(f"Error discarding draft: {e}")
 
 
 # =============================================================================

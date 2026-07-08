@@ -222,3 +222,60 @@ class LoreAuditWorker(QThread):
                     self.audit_completed.emit("")
         except Exception as e:
             self.audit_completed.emit("")
+
+class LorePromptWorker(QThread):
+    prompt_ready = pyqtSignal(str)
+    
+    def __init__(self, context_data, db_path="lore_forge_world.db", model="qwen2.5:latest"):
+        super().__init__()
+        self.context_data = context_data
+        self.db_path = db_path
+        self.model = model
+        
+    def run(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            entity_name = self.context_data.get('name', '')
+            if not entity_name:
+                conn.close()
+                return
+                
+            cursor.execute("SELECT count(*) FROM notes WHERE title LIKE ? OR content LIKE ?", (f"%{entity_name}%", f"%{entity_name}%"))
+            note_count = cursor.fetchone()[0]
+            conn.close()
+            
+            if note_count > 0:
+                # Lore already exists, no need to push a prompt
+                return
+                
+            system_prompt = (
+                "You are an active worldbuilding assistant. The user just selected a location or faction on the map that has NO recorded lore. "
+                "Ask a single, intriguing, creative question to prompt the user to invent some lore for it. "
+                "Keep it under 2 sentences. Be specific using the provided details. Do NOT answer the question yourself."
+            )
+            
+            user_prompt = f"Entity Name: {entity_name}\nType: {self.context_data.get('type')}\nDetails: {self.context_data}"
+            full_prompt = f"System: {system_prompt}\n\nUser: {user_prompt}"
+            
+            data = json.dumps({
+                "model": self.model,
+                "prompt": full_prompt,
+                "stream": False
+            }).encode("utf-8")
+
+            req = urllib.request.Request(
+                "http://localhost:11434/api/generate",
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+
+            with urllib.request.urlopen(req, timeout=30) as response:
+                resp_data = json.loads(response.read().decode("utf-8"))
+                result = resp_data.get("response", "").strip()
+                if result:
+                    # Prepend a special token so the chat UI knows this is an active prompt
+                    self.prompt_ready.emit(f"[ACTIVE_PROMPT] {entity_name}: {result}")
+        except Exception as e:
+            print(f"LorePromptWorker error: {e}")
