@@ -63,11 +63,12 @@ class OllamaPromptWorker(QThread):
     response_received = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, prompt, db_path="lore_forge_world.db", system_instruction=None, model="qwen2.5:latest"):
+    def __init__(self, prompt, db_path="lore_forge_world.db", system_instruction=None, model="qwen2.5:latest", genre="Fantasy"):
         super().__init__()
         self.prompt = prompt
         self.db_path = db_path
         self.model = model
+        self.genre = genre
         
         # Check for client text commands first before feeding to LLM
         intercepted_response = CommandInterceptor.intercept_and_execute(prompt, db_path)
@@ -83,6 +84,7 @@ class OllamaPromptWorker(QThread):
             "explore historical gaps, and resolve any contradictions between their text and map geography. "
             "If the user makes a statement that fills in one of the templates, explicitly state how you "
             "are updating that template.\n\n"
+            f"You must strictly adhere to the {self.genre} genre. Do not generate concepts or items outside of this setting.\n\n"
             f"Active Templates to enforce:\n{templates_context}\n\n"
             f"Active World Context:\n{world_context}"
         )
@@ -154,12 +156,13 @@ class OllamaPromptWorker(QThread):
 class LoreAuditWorker(QThread):
     audit_completed = pyqtSignal(str)
 
-    def __init__(self, note_title, note_content, db_path="lore_forge_world.db", model="qwen2.5:latest"):
+    def __init__(self, note_title, note_content, db_path="lore_forge_world.db", model="qwen2.5:latest", genre="Fantasy"):
         super().__init__()
         self.note_title = note_title
         self.note_content = note_content
         self.db_path = db_path
         self.model = model
+        self.genre = genre
 
     def run(self):
         try:
@@ -181,6 +184,7 @@ class LoreAuditWorker(QThread):
                 "You are a strict TTRPG worldbuilding validator. Your job is to find structural "
                 "contradictions between user written text and established map data.\n\n"
                 "CRITICAL RULES:\n"
+                f"- The setting is strictly {self.genre}. Flag any out-of-genre elements as inconsistencies.\n"
                 "- If the text contradicts the geography, log an inconsistency.\n"
                 "- If there are no inconsistencies, reply with only the word 'None'."
             )
@@ -226,11 +230,12 @@ class LoreAuditWorker(QThread):
 class LorePromptWorker(QThread):
     prompt_ready = pyqtSignal(str)
     
-    def __init__(self, context_data, db_path="lore_forge_world.db", model="qwen2.5:latest"):
+    def __init__(self, context_data, db_path="lore_forge_world.db", model="qwen2.5:latest", genre="Fantasy"):
         super().__init__()
         self.context_data = context_data
         self.db_path = db_path
         self.model = model
+        self.genre = genre
         
     def run(self):
         try:
@@ -250,7 +255,8 @@ class LorePromptWorker(QThread):
                 return
                 
             system_prompt = (
-                "You are an active worldbuilding assistant. The user just selected a location or faction on the map that has NO recorded lore. "
+                f"You are an active worldbuilding assistant operating strictly within a {self.genre} setting. "
+                "The user just selected a location or faction on the map that has NO recorded lore. "
                 "Ask a single, intriguing, creative question to prompt the user to invent some lore for it. "
                 "Keep it under 2 sentences. Be specific using the provided details. Do NOT answer the question yourself."
             )

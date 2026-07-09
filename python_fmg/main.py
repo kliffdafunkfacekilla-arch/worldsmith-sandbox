@@ -604,8 +604,9 @@ class WorldsmithMainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Worldsmith Sandbox — Fantasy World Builder")
+        self.setWindowTitle("Worldsmith Sandbox - Fantasy World Builder")
         self.resize(1600, 950)
+        self.start_ollama_server()
 
         # --- Backend Initialization ---
         self.db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "lore_forge_world.db"))
@@ -705,6 +706,30 @@ class WorldsmithMainWindow(QMainWindow):
         self.load_unresolved_inconsistencies()
         self.refresh_note_list()
         self.trigger_welcome_prompt()
+
+    def start_ollama_server(self):
+        """Silently launch Ollama serve in the background if not already running."""
+        import subprocess
+        import urllib.request
+        try:
+            # Check if it's already running on port 11434
+            req = urllib.request.Request("http://localhost:11434/")
+            with urllib.request.urlopen(req, timeout=1) as response:
+                if response.status == 200:
+                    return # Already running
+        except:
+            pass # Not running, start it
+            
+        try:
+            # Use CREATE_NO_WINDOW (0x08000000) on Windows to hide the console pop-up
+            subprocess.Popen(
+                ["ollama", "serve"],
+                creationflags=0x08000000, 
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        except Exception as e:
+            print(f"Failed to auto-launch Ollama: {e}")
 
     # =========================================================================
     # STYLESHEET
@@ -1363,6 +1388,16 @@ class WorldsmithMainWindow(QMainWindow):
         self.chk_active_prompts.setChecked(True)
         self.chk_active_prompts.setStyleSheet("color: #E0E0E0; font-size: 11px;")
         
+        self.cb_genre = QComboBox()
+        self.cb_genre.addItems(["Fantasy", "Sci-Fi", "Cyberpunk", "Post-Apocalyptic", "Historical Fiction", "Modern Day", "Horror"])
+        self.cb_genre.setStyleSheet("background: #111116; color: #EEEEF8; font-size: 11px;")
+        self.cb_genre.setToolTip("Select World Genre constraints for AI")
+        
+        chk_genre_l = QHBoxLayout()
+        chk_genre_l.addWidget(self.chk_active_prompts)
+        chk_genre_l.addWidget(self.cb_genre)
+        chk_genre_l.addStretch()
+        
         input_v_l = QVBoxLayout()
         input_v_l.setSpacing(4)
         input_v_l.setContentsMargins(0,0,0,0)
@@ -1380,7 +1415,7 @@ class WorldsmithMainWindow(QMainWindow):
         h_input_box.addWidget(self.btn_send_prompt)
         
         input_v_l.addLayout(h_input_box)
-        input_v_l.addWidget(self.chk_active_prompts)
+        input_v_l.addLayout(chk_genre_l)
         
         input_l.addLayout(input_v_l)
 
@@ -1935,8 +1970,10 @@ class WorldsmithMainWindow(QMainWindow):
             return
             
         context = random.choice(candidates)
+        genre = self.cb_genre.currentText() if hasattr(self, "cb_genre") else "Fantasy"
+        
         from python_fmg.core.ai_worker import LorePromptWorker
-        self.lore_prompt_worker = LorePromptWorker(context, self.db_path)
+        self.lore_prompt_worker = LorePromptWorker(context, self.db_path, genre=genre)
         self.lore_prompt_worker.prompt_ready.connect(self.handle_active_prompt_ready)
         self.lore_prompt_worker.start()
 
@@ -1967,8 +2004,9 @@ class WorldsmithMainWindow(QMainWindow):
         if not context.get("name"):
             return 
             
+        genre = self.cb_genre.currentText() if hasattr(self, "cb_genre") else "Fantasy"
         from python_fmg.core.ai_worker import LorePromptWorker
-        self.lore_prompt_worker = LorePromptWorker(context, self.db_path)
+        self.lore_prompt_worker = LorePromptWorker(context, self.db_path, genre=genre)
         self.lore_prompt_worker.prompt_ready.connect(self.handle_active_prompt_ready)
         self.lore_prompt_worker.start()
         
@@ -2371,7 +2409,8 @@ class WorldsmithMainWindow(QMainWindow):
         else:
             self.pending_active_entity = None
 
-        self.ai_worker = OllamaPromptWorker(user_text, db_path=self.db_path, system_instruction=system_instr)
+        genre = self.cb_genre.currentText() if hasattr(self, "cb_genre") else "Fantasy"
+        self.ai_worker = OllamaPromptWorker(user_text, db_path=self.db_path, system_instruction=system_instr, genre=genre)
         self.ai_worker.response_received.connect(self.handle_ai_response)
         self.ai_worker.error_occurred.connect(self.handle_ai_error)
         self.ai_worker.start()
