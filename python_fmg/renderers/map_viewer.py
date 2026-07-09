@@ -38,7 +38,7 @@ class MapViewerWidget(QWidget):
             "Biomes": True,
             "Political States": True,
             "Provinces": True,
-            "Culture": True,
+            "Cultures": True,
             "Religion": True,
             "Burgs": True,
             "Routes": True,

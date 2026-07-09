@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QSlider, QFileDialog, QDialog, QListWidget, QInputDialog, QCheckBox,
     QFrame, QToolButton, QScrollArea, QMenu
 )
-from PyQt6.QtCore import Qt, QPointF, QPoint, pyqtSignal
+from PyQt6.QtCore import Qt, QPointF, QPoint, pyqtSignal, QTimer
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QFont, QPixmap,
     QTextCursor, QTextCharFormat
@@ -1756,7 +1756,7 @@ class WorldsmithMainWindow(QMainWindow):
         except Exception as e:
             print(f"Error sinking UI overlays: {e}")
 
-    def setup_database(self):
+    def save_world_to_file(self):
         file_path, _ = QFileDialog.getSaveFileName(self, "Save World File", "", "Database Files (*.db)")
         if not file_path:
             return
@@ -2344,9 +2344,33 @@ class WorldsmithMainWindow(QMainWindow):
         if title == "New Note..." or not title:
             self.note_title_input.clear()
             self.note_editor.clear()
-            if row:
-                self.note_editor.setPlainText(row[0])
-                self.statusBar.showMessage(f"Loaded note '{title}'.")
+            self.current_note_id = None
+            return
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            if title.startswith("[DRAFT] "):
+                clean_title = title.replace("[DRAFT] ", "", 1)
+                cursor.execute("SELECT id, title, content FROM lore_drafts WHERE title = ?", (clean_title,))
+                row = cursor.fetchone()
+                if row:
+                    self.current_loaded_draft_id = row[0]
+                    self.note_title_input.setText(row[1])
+                    self.note_editor.setPlainText(row[2])
+                    self.current_note_id = None
+                    self.staging_action_widget.setVisible(True)
+                    self.statusBar.showMessage(f"Loaded draft '{clean_title}'.")
+            else:
+                cursor.execute("SELECT id, content FROM notes WHERE title = ?", (title,))
+                row = cursor.fetchone()
+                if row:
+                    self.current_note_id = row[0]
+                    self.note_title_input.setText(title)
+                    self.note_editor.setPlainText(row[1])
+                    self.statusBar.showMessage(f"Loaded note '{title}'.")
+            conn.close()
         except Exception as e:
             self.statusBar.showMessage(f"Error loading note: {e}")
 

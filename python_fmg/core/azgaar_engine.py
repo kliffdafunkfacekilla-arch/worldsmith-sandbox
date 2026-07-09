@@ -132,28 +132,44 @@ class AzgaarEngine:
 
     def generate_voronoi_mesh(self):
         np.random.seed(42)
+        # Generate initial random points within the canvas
         points = np.column_stack((
             np.random.uniform(20, self.width - 20, self.num_points),
             np.random.uniform(20, self.height - 20, self.num_points)
         ))
         
+        # Create bounding dummy points far outside the canvas to close all regions inside the canvas
+        w, h = self.width, self.height
+        bounding_points = np.array([
+            [-w, -h], [2*w, -h], [2*w, 2*h], [-w, 2*h],
+            [w/2, -h], [w/2, 2*h], [-w, h/2], [2*w, h/2]
+        ])
+        
         for _ in range(2):
-            vor = Voronoi(points)
+            all_points = np.vstack((points, bounding_points))
+            vor = Voronoi(all_points)
             new_points = []
+            
+            # Only relax the real points (indices 0 to num_points - 1)
             for i in range(self.num_points):
                 region_idx = vor.point_region[i]
                 region = vor.regions[region_idx]
                 if not region or -1 in region:
+                    # Should rarely happen for internal points due to bounding dummy points
                     new_points.append(points[i])
                 else:
                     poly = vor.vertices[region]
-                    new_points.append(poly.mean(axis=0))
-            if len(new_points) < self.num_points:
-                diff = self.num_points - len(new_points)
-                new_points.extend(points[:diff])
-            points = np.array(new_points)[:self.num_points]
+                    # Clamp the relaxed point to stay within bounds
+                    center = poly.mean(axis=0)
+                    cx = np.clip(center[0], 5, self.width - 5)
+                    cy = np.clip(center[1], 5, self.height - 5)
+                    new_points.append([cx, cy])
+                    
+            points = np.array(new_points)
 
-        self.vor_mesh = Voronoi(points)
+        # Final Voronoi with relaxed points and bounding points
+        all_points = np.vstack((points, bounding_points))
+        self.vor_mesh = Voronoi(all_points)
         
         self.cells = []
         for i in range(self.num_points):
