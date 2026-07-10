@@ -342,7 +342,16 @@ class MapViewerWidget(QWidget):
             path.closeSubpath()
             
             color = QColor("#27272a")
-            if self.layer_mode == "Elevation" and self.visibility_map["Elevation"]:
+            if self.layer_mode == "Underworld & Crime" and self.visibility_map["Underworld & Crime"]:
+                crime_status = cell.get("crime_type", "none")
+                if crime_status == "syndicate_territory":
+                    color = QColor("#7f1d1d") # Crimson Red Syndicate domain
+                    color.setAlpha(180)
+                elif crime_status == "bandit_outpost":
+                    color = QColor("#b91c1c")
+                else:
+                    color = QColor("#1c1c24")
+            elif self.layer_mode == "Elevation" and self.visibility_map["Elevation"]:
                 elev = self.elevation_data.get(cell_id, 0)
                 if elev < 20:
                     color = QColor(int((20 - elev) * 12), 30, int(80 + elev * 6))
@@ -485,6 +494,18 @@ class MapViewerWidget(QWidget):
                     c1 = cells[path[step]]
                     c2 = cells[path[step+1]]
                     painter.drawLine(QPointF(c1["x"], c1["y"]), QPointF(c2["x"], c2["y"]))
+
+        # INSERT: Smuggling Routes Polyline Brush Renderer
+        if self.visibility_map.get("Underworld & Crime", True):
+            painter.setPen(QPen(QColor("#f43f5e"), 2, Qt.PenStyle.DashDotLine))
+            # Query paths matching criminal attributes from your engine
+            for crime_route in getattr(self.parent.map_engine, "smuggling_paths", []):
+                path = crime_route.get("path", [])
+                if len(path) >= 2:
+                    for step in range(len(path) - 1):
+                        c1 = cells[path[step]]
+                        c2 = cells[path[step+1]]
+                        painter.drawLine(QPointF(c1["x"], c1["y"]), QPointF(c2["x"], c2["y"]))
 
         # Borders and Coastlines
         if self.visibility_map.get("Coastlines", True):

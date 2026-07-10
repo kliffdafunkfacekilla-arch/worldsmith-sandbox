@@ -30,6 +30,26 @@ from python_fmg.ui.map_binding import MapBindingDialog
 from python_fmg.core.emblem_generator import EmblemGenerator
 from python_fmg.core.burg_generator import BurgGenerator
 
+def compute_atmospheric_dimension_layer(altitude_km):
+    """
+    Applies the hidden formula to determine if a metric coordinate falls into 
+    an active Sky Layer canvas or an invisible system buffer zone.
+    Main Ground Map: 0km to 1km
+    Sky Layer 1: 1km to 2km (Buffer skipped: 2km to 3km)
+    Sky Layer 2: 3km to 4km
+    """
+    if altitude_km <= 1.0:
+        return "surface", 0.0, 1.0
+        
+    # Calculate target sequence tier indexes
+    layer_idx = int((altitude_km + 1) // 2)
+    bottom_bound = (2 * layer_idx) - 1
+    top_bound = 2 * layer_idx
+    
+    if bottom_bound <= altitude_km <= top_bound:
+        return f"sky_{layer_idx}", float(bottom_bound), float(top_bound)
+    else:
+        return "system_buffer_zone", float(top_bound), float(top_bound + 1)
 
 # =============================================================================
 # DIALOG: Settlement Street Map Preview
@@ -1057,6 +1077,11 @@ class WorldsmithMainWindow(QMainWindow):
             ("Coordinates",      "°"),
             ("Compass",          "O"),
             ("Scale Bar",        "_"),
+            ("Underworld & Crime", "🏴☠️"),
+            ("Sky Layer 1 (1-2km)", "🌌"),
+            ("Sky Layer 2 (3-4km)", "🌌"),
+            ("Subterranean (0-20ft)", "⛏️"),
+            ("Subterranean (20-40ft)", "⛏️"),
             ("Vignette",         "V"),
         ]
 
@@ -1857,9 +1882,12 @@ class WorldsmithMainWindow(QMainWindow):
         dialog.exec()
 
     def setup_markers_db(self):
+        """Initializes database support for multi-dimensional layer configurations and custom dynamic schemas."""
         try:
-            conn   = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
+            
+            # Original binding table preservation
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS note_map_bindings (
                     note_id INTEGER,
@@ -1867,6 +1895,7 @@ class WorldsmithMainWindow(QMainWindow):
                     FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
                 )
             """)
+            
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS markdown_map_bindings (
                     title TEXT PRIMARY KEY,
@@ -1875,10 +1904,23 @@ class WorldsmithMainWindow(QMainWindow):
                     cell_idx INTEGER
                 )
             """)
+            
+            # CORE UPGRADE: 3D Multi-Dimensional Coordinate Stack Table
+            # dimension_z defines: 'surface', 'sky_1', 'sky_2', 'sub_20ft', 'sub_40ft'
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS multi_dimensional_coordinates (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    bind_type TEXT NOT NULL, -- 'marker', 'crime_route', 'leyline', 'residence'
+                    cell_idx INTEGER NOT NULL,
+                    dimension_z TEXT NOT NULL DEFAULT 'surface',
+                    custom_properties TEXT DEFAULT '{}' -- EAV serialized JSON storage string
+                )
+            """)
             conn.commit()
             conn.close()
-        except:
-            pass
+        except Exception as e:
+            print(f"Error initializing multi-dimensional schema tables: {e}")
 
     def setup_timeline_db(self):
         try:

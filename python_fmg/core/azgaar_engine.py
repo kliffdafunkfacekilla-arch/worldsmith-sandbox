@@ -298,30 +298,118 @@ class AzgaarEngine:
         return self._neighbors_map.get(cell_idx, [])
 
     def run_biomes_climate(self, wind_angle_deg=45):
-        wind_rad = math.radians(wind_angle_deg)
-        wind_x = math.cos(wind_rad)
-        wind_y = math.sin(wind_rad)
+        """
+        7-Band Atmospheric & Ocean Surface Current Physics Simulation Layer.
+        Calculates wind vectors per band, unloads moisture on rising slopes (Orographic Lift),
+        creates Rain Shadows, and simulates wind-driven thermal current deflection.
+        """
+        # Step 1: Assign Wind Vectors and Base Temperatures by the 7 Horizontal Bands
+        for cell in self.cells:
+            # Normalize y-axis from 0.0 (North Pole) to 1.0 (South Pole)
+            pct_y = cell["y"] / self.height
+            
+            # Identify 7 strict horizontal climate cells & prevailing winds
+            if pct_y < 0.14:   # Band 1: Polar Cap (90°N - 60°N)
+                cell["wind_dx"], cell["wind_dy"] = -1.0, 1.0   # ↙️ Polar Easterlies
+                base_temp = -15.0
+            elif pct_y < 0.28: # Band 2: Subpolar Low (60°N - 45°N)
+                cell["wind_dx"], cell["wind_dy"] = 1.0, -1.0   # ↗️ Westerlies
+                base_temp = 5.0
+            elif pct_y < 0.43: # Band 3: Temperate (45°N - 30°N)
+                cell["wind_dx"], cell["wind_dy"] = 1.0, -1.0   # ↗️ Westerlies
+                base_temp = 15.0
+            elif pct_y < 0.57: # Band 4: Subtropical High / Equatorial (30°N - 15°N)
+                cell["wind_dx"], cell["wind_dy"] = -1.0, 1.0   # ↙️ NE Trade Winds
+                base_temp = 28.0
+            elif pct_y < 0.71: # Band 5: Equatorial Low (15°N - 15°S)
+                cell["wind_dx"], cell["wind_dy"] = -1.0, 0.0   # ⬅️ Doldrums
+                base_temp = 32.0
+            elif pct_y < 0.85: # Band 6: Subtropical Low (15°S - 30°S)
+                cell["wind_dx"], cell["wind_dy"] = -1.0, -1.0  # ↖️ SE Trade Winds
+                base_temp = 25.0
+            else:              # Band 7: Southern Temperate (30°S - 45°S)
+                cell["wind_dx"], cell["wind_dy"] = 1.0, -1.0   # ↖️ Westerlies
+                base_temp = 12.0
+
+            # Apply baseline temperature and elevation-based lapse rate
+            cell["temp"] = base_temp
+            if cell["h"] >= 20:
+                cell["temp"] -= (cell["h"] - 20) * 0.12 # Mountain alt cooling
+            else:
+                cell["temp"] -= (20 - cell["h"]) * 0.05 # Abyssal depth cooling
+
+        # Step 2: Simulate Thermal Ocean Currents Deflecting off Continental Barriers
+        # We trace water vectors along wind paths to see where they collide with land
+        for cell in self.cells:
+            cell["current_thermal"] = "neutral"
+            if cell["h"] < 20: # Ocean cells only
+                # Find downstream cells along wind path
+                target_x = cell["x"] + (cell["wind_dx"] * 40)
+                target_y = cell["y"] + (cell["wind_dy"] * 40)
+                
+                # Check for near coastal collisions
+                for n_id in self.get_neighbors(cell["i"]):
+                    nc = self.cells[n_id]
+                    if nc["h"] >= 20: # Hits land barrier -> Deflects Warm/Cold
+                        if cell["y"] < self.height * 0.5: # Northern Hemisphere
+                            cell["current_thermal"] = "warm" if cell["wind_dx"] > 0 else "cold"
+                        else: # Southern Hemisphere
+                            cell["current_thermal"] = "cold" if cell["wind_dx"] > 0 else "warm"
+
+        # Apply ocean current temperature anomalies to adjacent coastal land cells
+        for cell in self.cells:
+            if cell["h"] >= 20:
+                for n_id in self.get_neighbors(cell["i"]):
+                    nc = self.cells[n_id]
+                    if nc["h"] < 20 and nc.get("current_thermal") == "warm":
+                        cell["temp"] += 4.0 # Warm current anomaly warming coast
+                    elif nc["h"] < 20 and nc.get("current_thermal") == "cold":
+                        cell["temp"] -= 5.0 # Cold current anomaly causing coastal deserts
+
+        # Step 3: Orographic Precipitation & Rain Shadow Propagation Loop
+        # Sort cells along the vector path of the dominant global winds to run precipitation accumulation
+        sorted_cells = sorted(self.cells, key=lambda c: (c["x"] * c.get("wind_dx", 1.0) + c["y"] * c.get("wind_dy", -1.0)))
         
-        sorted_cells = sorted(self.cells, key=lambda c: (c["x"] * wind_x + c["y"] * wind_y))
+        # Track simulated saturated moisture levels across grid edges
+        moisture_map = {c["i"]: 1.0 for c in self.cells}
         
         for cell in sorted_cells:
-            dist_to_equator = abs(cell["y"] - 300) / 300.0
-            cell["temp"] = 35.0 - (dist_to_equator * 40.0)
-            
-            if cell["h"] >= 20:
-                cell["temp"] -= (cell["h"] - 20) * 0.1
-                
-                neighbors = self.get_neighbors(cell["i"])
-                upwind_neighbors = [self.cells[n] for n in neighbors if (self.cells[n]["x"] * wind_x + self.cells[n]["y"] * wind_y) < (cell["x"] * wind_x + cell["y"] * wind_y)]
-                if upwind_neighbors:
-                    lowest_upwind = min(upwind_neighbors, key=lambda c: c["h"])
-                    if cell["h"] > lowest_upwind["h"] + 20:
-                        cell["prec"] = int(max(0, cell["prec"] - 10))
-            else:
-                cell["temp"] -= abs(cell["h"]) * 0.05
-                
-            self._assign_whittaker_biomes_for_cell(cell)
+            c_idx = cell["i"]
+            air_moisture = moisture_map[c_idx]
 
+            if cell["h"] < 20:
+                # Regain water saturation over open ocean paths
+                air_moisture = min(1.0, air_moisture + 0.25)
+                cell["prec"] = int(air_moisture * 80)
+            else:
+                # Evaluate upwind height compared to neighbors to calculate elevation slopes
+                neighbors = self.get_neighbors(c_idx)
+                upwind_nodes = [self.cells[n] for n in neighbors if (self.cells[n]["x"] * cell["wind_dx"] + self.cells[n]["y"] * cell["wind_dy"]) < (cell["x"] * cell["wind_dx"] + cell["y"] * cell["wind_dy"])]
+                
+                if upwind_nodes:
+                    lowest_upwind = min(upwind_nodes, key=lambda x: x["h"])
+                    slope = cell["h"] - lowest_upwind["h"]
+                    
+                    if slope > 5:
+                        # Wind hits a rising slope (Orographic Lift) -> Heavy Rain Dump
+                        dump = air_moisture * (slope / 100.0) * 2.5
+                        cell["prec"] = int(dump * 120)
+                        air_moisture = max(0.05, air_moisture - dump)
+                    else:
+                        # Downward slope or flat ground -> Rain Shadow Effect
+                        cell["prec"] = int(air_moisture * 15)
+                        air_moisture = max(0.02, air_moisture - 0.02)
+                else:
+                    cell["prec"] = int(air_moisture * 30)
+
+            # Pass the modified air mass downstream to downwind neighbors
+            for n_id in self.get_neighbors(c_idx):
+                if (self.cells[n_id]["x"] * cell["wind_dx"] + self.cells[n_id]["y"] * cell["wind_dy"]) > (cell["x"] * cell["wind_dx"] + cell["y"] * cell["wind_dy"]):
+                    moisture_map[n_id] = air_moisture
+
+        # Recalculate the final Whittaker biomes matrix with our accurate physics arrays
+        for cell in self.cells:
+            self._assign_whittaker_biomes_for_cell(cell)
     def _assign_whittaker_biomes_for_cell(self, cell):
         h = cell["h"]
         t = cell["temp"]

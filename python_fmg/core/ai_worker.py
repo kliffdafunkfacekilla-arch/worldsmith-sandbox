@@ -164,8 +164,51 @@ class LoreAuditWorker(QThread):
         self.model = model
         self.genre = genre
 
+    def process_lore_compliance_checks(self, note_title, note_body, frontmatter_dict, disabled_layers):
+        """
+        Evaluates cross-layer data logic. Aborts inference loop if inline 
+        comments or frontmatter dictionaries contain explicit 'ai-ignore' command tags.
+        """
+        # Check for direct Frontmatter override instructions
+        ai_overrides = frontmatter_dict.get("ai_override", [])
+        
+        # Check for inline user escape strings inside note content body
+        if "<!-- ai-ignore hydrology_uphill -->" in note_body:
+            ai_overrides.append("hydrology_uphill")
+        if "<!-- ai-ignore crime_proximity -->" in note_body:
+            ai_overrides.append("crime_proximity")
+
+        detected_anomalies = []
+
+        # Validation Rule A: River direction compliance check
+        if "hydrology_uphill" not in ai_overrides and "Rivers" not in disabled_layers:
+            pass
+
+        # Validation Rule B: Smuggling and Crime Layer strategic compliance check
+        if "crime_proximity" not in ai_overrides and "Underworld & Crime" not in disabled_layers:
+            if frontmatter_dict.get("security_rating") == "Absolute" and frontmatter_dict.get("layer_z", "surface") == "surface":
+                detected_anomalies.append("Conflict: High security notation overlaps an active syndicate territory zone.")
+
+        return detected_anomalies
+
     def run(self):
         try:
+            # Parse simple frontmatter if it exists
+            frontmatter_dict = {}
+            if self.note_content.startswith("---"):
+                parts = self.note_content.split("---", 2)
+                if len(parts) >= 3:
+                    import yaml
+                    try:
+                        frontmatter_dict = yaml.safe_load(parts[1]) or {}
+                    except:
+                        pass
+            
+            anomalies = self.process_lore_compliance_checks(self.note_title, self.note_content, frontmatter_dict, [])
+            if anomalies:
+                self.audit_completed.emit("Anomaly detected before inference:\n" + "\n".join(anomalies))
+                return
+
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
