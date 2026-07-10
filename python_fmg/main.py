@@ -702,7 +702,7 @@ class WorldsmithMainWindow(QMainWindow):
         self.active_prompt_timer.timeout.connect(self.trigger_global_active_prompt)
         self.active_prompt_timer.start(120000) # Every 2 minutes
         
-        self.trigger_world_regeneration()
+        # Do not generate world automatically on load. Wait for user input or file load.
         self.load_unresolved_inconsistencies()
         self.refresh_note_list()
         self.trigger_welcome_prompt()
@@ -2456,11 +2456,15 @@ class WorldsmithMainWindow(QMainWindow):
         self._update_session_progress()
 
     def handle_ai_error(self, err_msg):
+        if "500" in err_msg:
+            friendly_err = f'<b>[Error]</b> Ollama returned an Internal Server Error ({err_msg}). This usually means your machine ran out of memory loading the model, or the model file is corrupt. Try running `ollama run qwen2.5:latest` in your terminal to debug.'
+        else:
+            friendly_err = f'<b>[Error]</b> Could not reach local Ollama server ({err_msg}). Ensure Ollama is running (ollama serve).'
+            
         self.ai_prompt_history.append(
             f'<div style="margin: 4px;">'
             f'<span style="color: #ef4444; font-size: 11px;">'
-            f'<b>[Error]</b> Could not reach local Ollama server ({err_msg}). '
-            f'Ensure Ollama is running (ollama serve).'
+            f'{friendly_err}'
             f'</span></div>'
         )
         self.statusBar.showMessage("AI communication error.")
@@ -2597,9 +2601,7 @@ def main():
     try:
         subprocess.Popen(
             ["ollama", "serve"], 
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
     except Exception as e:
         print(f"Warning: Could not start Ollama automatically: {e}")
