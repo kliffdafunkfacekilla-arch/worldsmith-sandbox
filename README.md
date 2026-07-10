@@ -40,3 +40,20 @@ See the `docs/` folder for comprehensive documentation:
 - [Architecture](docs/architecture.md): Overview of the engine, database, and UI.
 - [User Guide](docs/user_guide.md): Instructions on map brushes and lore tools.
 - [Testing](docs/testing.md): Automated UI fuzzer and E2E simulation details.
+
+## Contributing
+
+We welcome contributions! To ensure stability, please run the automated test suites before submitting a pull request:
+
+```bash
+# Run the autonomous UI fuzzer to catch signal errors
+python -m tests.auto_tester
+
+# Run the End-to-End simulation to verify map logic and database persistence
+python -m tests.e2e_tester
+```
+
+Please see our [Architecture](docs/architecture.md) documentation for an overview of the codebase before making structural changes.
+
+## License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

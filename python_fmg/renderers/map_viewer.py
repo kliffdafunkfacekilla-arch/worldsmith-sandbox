@@ -74,11 +74,11 @@ class MapViewerWidget(QWidget):
         # We need to find the files in the workspace directory.
         # This resolves to c:/Users/krazy/Desktop/worldsmith-sandbox
         workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        tilemap_path = os.path.join(workspace_dir, "fantasyhextiles_v3_borderless.png")
-        sprites_path = os.path.join(workspace_dir, "d4np5o7-d68e778b-415c-4b59-90c5-c61c55f015e7.png")
+        tilemap_path = os.path.join(workspace_dir, "assets", "fantasyhextiles_v3_borderless.png")
+        sprites_path = os.path.join(workspace_dir, "assets", "d4np5o7-d68e778b-415c-4b59-90c5-c61c55f015e7.png")
         
         if not os.path.exists(tilemap_path) or not os.path.exists(sprites_path):
-            print(f"WARNING: Missing tilemap/sprites in {workspace_dir}!")
+            print(f"WARNING: Missing tilemap/sprites in {os.path.join(workspace_dir, 'assets')}!")
             # We'll use a delayed popup after window shows to ensure it renders correctly
             self._missing_assets = True
         else:
