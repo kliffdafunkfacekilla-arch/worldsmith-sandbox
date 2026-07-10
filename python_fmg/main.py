@@ -655,9 +655,7 @@ class WorldsmithMainWindow(QMainWindow):
         # --- Stylesheet ---
         self._apply_stylesheet()
 
-        # --- Main Splitter ---
-        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.setCentralWidget(self.main_splitter)
+        # --- Main Splitter (Moved below compatibility widgets) ---
 
         # --- Hidden Compatibility Widgets ---
         # These preserve all existing slot method signatures without modification.
@@ -702,14 +700,87 @@ class WorldsmithMainWindow(QMainWindow):
         self.cb_tools.currentTextChanged.connect(self.trigger_azgaar_tool_mode)
         self.cb_tools.hide()
 
-        # --- Build Panels ---
-        self._build_file_tree_panel()
-        self._build_map_panel()
-        self._build_writing_panel()
-        self._build_ai_panel()
+        # Master horizontal layout to hold the file browser and the main flanking panel area
+        self.master_layout = QHBoxLayout()
+        self.master_layout.setContentsMargins(0, 0, 0, 0)
+        self.master_layout.setSpacing(0)
         
-        # Set default splitter proportions (File Tree 15%, Map 35%, Writing 30%, AI 20%)
-        self.main_splitter.setSizes([240, 560, 480, 320])
+        # 1. Collapsible File Browser Container
+        self.file_browser_sidebar = QWidget()
+        self.file_browser_sidebar.setObjectName("FileTreePanel")
+        self.file_browser_sidebar.setFixedWidth(220)
+        fb_layout = QVBoxLayout(self.file_browser_sidebar)
+        fb_layout.setContentsMargins(6, 6, 6, 6)
+        
+        # Wire up your existing file system tree model
+        self.file_model = QFileSystemModel()
+        lore_dir = self.get_lore_dir()
+        if not os.path.exists(lore_dir): os.makedirs(lore_dir)
+        self.file_model.setRootPath(lore_dir)
+        
+        self.file_tree = QTreeView()
+        self.file_tree.setModel(self.file_model)
+        self.file_tree.setRootIndex(self.file_model.index(lore_dir))
+        self.file_tree.setColumnHidden(1, True)
+        self.file_tree.setColumnHidden(2, True)
+        self.file_tree.setColumnHidden(3, True)
+        self.file_tree.setHeaderHidden(True)
+        self.file_tree.clicked.connect(self.on_file_tree_clicked)
+        
+        fb_layout.addWidget(QLabel("<b>Lore Vault Browser</b>"))
+        fb_layout.addWidget(self.file_tree)
+        self.master_layout.addWidget(self.file_browser_sidebar)
+
+        # 2. Main Central Workspace Splitter (Left Bay | Center Notebook | Right Bay)
+        self.workspace_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.workspace_splitter.setStyleSheet("QSplitter::handle { background: #29292E; width: 3px; }")
+        self.master_layout.addWidget(self.workspace_splitter, 1)
+
+        # Instantiate all your core functional widgets so they can be referenced interchangeably
+        self._init_modular_tool_pool()
+
+        # Build Left Flanking Tool Bay Slot
+        self.left_tool_bay = QWidget()
+        self.left_tool_bay_layout = QVBoxLayout(self.left_tool_bay)
+        self.left_tool_bay_layout.setContentsMargins(4, 4, 4, 4)
+        self.left_picker = QComboBox()
+        self.left_picker.addItems(["Hide Tool", "Interactive Map", "AI Workflow Terminal", "Timeline & Cosmology", "Data Tables Manager", "Render & Export Setup"])
+        self.left_picker.currentTextChanged.connect(lambda text: self._swap_modular_tool("left", text))
+        self.left_tool_container = QWidget()
+        self.left_tool_container_layout = QVBoxLayout(self.left_tool_container)
+        self.left_tool_container_layout.setContentsMargins(0, 0, 0, 0)
+        self.left_tool_bay_layout.addWidget(self.left_picker)
+        self.left_tool_bay_layout.addWidget(self.left_tool_container, 1)
+        
+        # Build Right Flanking Tool Bay Slot
+        self.right_tool_bay = QWidget()
+        self.right_tool_bay_layout = QVBoxLayout(self.right_tool_bay)
+        self.right_tool_bay_layout.setContentsMargins(4, 4, 4, 4)
+        self.right_picker = QComboBox()
+        self.right_picker.addItems(["Hide Tool", "Interactive Map", "AI Workflow Terminal", "Timeline & Cosmology", "Data Tables Manager", "Render & Export Setup"])
+        self.right_picker.currentTextChanged.connect(lambda text: self._swap_modular_tool("right", text))
+        self.right_tool_container = QWidget()
+        self.right_tool_container_layout = QVBoxLayout(self.right_tool_container)
+        self.right_tool_container_layout.setContentsMargins(0, 0, 0, 0)
+        self.right_tool_bay_layout.addWidget(self.right_picker)
+        self.right_tool_bay_layout.addWidget(self.right_tool_container, 1)
+
+        # Center Writing Frame Container (Stays Fixed in Center)
+        self._build_writing_panel() # Re-uses your existing notebook builder layout function
+
+        # Inject components into the splitter workspace in direct visual sequence order
+        self.workspace_splitter.addWidget(self.left_tool_bay)
+        self.workspace_splitter.addWidget(self.note_container) # Centered Writing Panel
+        self.workspace_splitter.addWidget(self.right_tool_bay)
+
+        # Set default slot configurations (Left Slot = Map, Center = Notes, Right Slot = AI)
+        self.left_picker.setCurrentText("Interactive Map")
+        self.right_picker.setCurrentText("AI Workflow Terminal")
+        
+        # Set central layout wrapper widget
+        central_widget = QWidget()
+        central_widget.setLayout(self.master_layout)
+        self.setCentralWidget(central_widget)
 
         # --- Status Bar ---
         self.statusBar = QStatusBar()
@@ -759,6 +830,93 @@ class WorldsmithMainWindow(QMainWindow):
     # =========================================================================
     # STYLESHEET
     # =========================================================================
+    def _init_modular_tool_pool(self):
+        """Pre-instantiates all interface tools inside isolated memory frames so they can be swapped dynamically."""
+        # A. Map Viewer Module Frame
+        self.map_tool_frame = QWidget()
+        mt_layout = QVBoxLayout(self.map_tool_frame)
+        mt_layout.setContentsMargins(0, 0, 0, 0)
+        # Re-uses your specialized map viewport container panel setup
+        self.map_viewer = MapViewerWidget(self)
+        self.map_viewer.cell_hovered.connect(self.handle_cell_hovered)
+        self.map_viewer.cell_clicked.connect(self.handle_cell_clicked)
+        mt_layout.addWidget(self.map_viewer)
+
+        # B. AI Assistant Module Frame
+        self.ai_tool_frame = QWidget()
+        # Isolates your existing _build_ai_panel components into this tool frame child container
+        self._assemble_modular_ai_panel(self.ai_tool_frame)
+
+        # C. Timeline & Cosmology Module Frame
+        self.timeline_tool_frame = QWidget()
+        tl_layout = QVBoxLayout(self.timeline_tool_frame)
+        self.lbl_timeline = QLabel("<b>Historical Timeline</b>")
+        self.timeline_slider = QSlider(Qt.Orientation.Horizontal)
+        self.timeline_slider.setRange(1, 1000 * 420)
+        self.timeline_slider.valueChanged.connect(self.handle_timeline_changed)
+        from python_fmg.renderers.celestial_widget import CelestialPreviewWidget
+        self.celestial_widget = CelestialPreviewWidget(self)
+        tl_layout.addWidget(self.lbl_timeline)
+        tl_layout.addWidget(self.timeline_slider)
+        tl_layout.addWidget(self.celestial_widget)
+        tl_layout.addStretch()
+
+        # D. Section Entities Table Manager Module Frame
+        self.tables_tool_frame = QWidget()
+        tb_layout = QVBoxLayout(self.tables_tool_frame)
+        self.cb_quick_table = QComboBox()
+        self.cb_quick_table.addItems(["Select Table...", "States Table", "Cultures Table", "Religions Table", "Burgs Table"])
+        self.cb_quick_table.currentTextChanged.connect(self.open_element_table_editor)
+        tb_layout.addWidget(QLabel("<b>Dossier &amp; Registry Manager</b>"))
+        tb_layout.addWidget(self.cb_quick_table)
+        tb_layout.addStretch()
+
+        # E. Final Render & Export Setup Module Frame
+        self.export_tool_frame = QWidget()
+        ex_layout = QVBoxLayout(self.export_tool_frame)
+        btn_run_export = QPushButton("🚀 Generate Master Packages")
+        btn_run_export.clicked.connect(self.export_master_packages)
+        btn_compile_wiki = QPushButton("🌐 Compile Static HTML Wiki")
+        btn_compile_wiki.clicked.connect(self.compile_static_wiki)
+        ex_layout.addWidget(QLabel("<b>Cartography Export Setup</b>"))
+        ex_layout.addWidget(btn_run_export)
+        ex_layout.addWidget(btn_compile_wiki)
+        ex_layout.addStretch()
+
+    def _swap_modular_tool(self, slot_side, tool_text):
+        """Dynamically clears the target docking bay and reparents the selected component."""
+        # Map choice strings directly to frame memory locations
+        tool_mapping = {
+            "Interactive Map": self.map_tool_frame,
+            "AI Workflow Terminal": self.ai_tool_frame,
+            "Timeline & Cosmology": self.timeline_tool_frame,
+            "Data Tables Manager": self.tables_tool_frame,
+            "Render & Export Setup": self.export_tool_frame
+        }
+        
+        target_container = self.left_tool_container if slot_side == "left" else self.right_tool_container
+        target_layout = self.left_tool_container_layout if slot_side == "left" else self.right_tool_container_layout
+        target_bay = self.left_tool_bay if slot_side == "left" else self.right_tool_bay
+
+        # Clear out current child component without destroying it
+        while target_layout.count():
+            item = target_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+
+        if tool_text == "Hide Tool":
+            target_bay.setVisible(False)
+        else:
+            target_bay.setVisible(True)
+            selected_widget = tool_mapping.get(tool_text)
+            if selected_widget:
+                target_layout.addWidget(selected_widget)
+                selected_widget.show()
+                
+        # Instantly recalculate window boundaries smoothly
+        # self.workspace_splitter.refresh()
+
     def _apply_stylesheet(self):
         self.setStyleSheet("""
             QMainWindow, QWidget {
@@ -1194,7 +1352,7 @@ class WorldsmithMainWindow(QMainWindow):
         # Default active layer
         self._select_layer_row("Biomes")
 
-        self.main_splitter.addWidget(map_outer)
+        pass # Replaced by workspace_splitter in main layout
 
     def _build_writing_panel(self):
         """Build Panel 2: Writing & Viewing Workspace with formatting toolbar."""
@@ -1342,12 +1500,12 @@ class WorldsmithMainWindow(QMainWindow):
         staging_action_l.addWidget(self.btn_discard_draft)
         note_layout.addWidget(self.staging_action_widget)
 
-        self.main_splitter.addWidget(self.note_container)
+        pass # Replaced by workspace_splitter in main layout
 
-    def _build_ai_panel(self):
+    def _assemble_modular_ai_panel(self, parent_widget):
         """Build Panel 3: AI Writing Assistant."""
         # --- AI Chat Tab ---
-        self.ai_container = QWidget()
+        self.ai_container = parent_widget
         self.ai_container.setObjectName("AIPanel")
         ai_layout = QVBoxLayout(self.ai_container)
         ai_layout.setContentsMargins(0, 0, 0, 0)
@@ -1562,7 +1720,7 @@ class WorldsmithMainWindow(QMainWindow):
 
         ai_layout.addWidget(timeline_widget)
 
-        self.main_splitter.addWidget(self.ai_container)
+        pass # Replaced by workspace_splitter in main layout
 
     # =========================================================================
     # NEW UI HELPER METHODS

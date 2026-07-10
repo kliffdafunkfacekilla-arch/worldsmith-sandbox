@@ -137,7 +137,7 @@ class AzgaarEngine:
         self.military_regiments = []
         self.zones = []
         
-        self.name_gen = MarkovNameGenerator()
+        self.name_gen = AdvancedMarkovNameGenerator()
         # Voronoi mesh is no longer generated automatically on init.
         # Call generate_voronoi_mesh() explicitly to create a new map.
 

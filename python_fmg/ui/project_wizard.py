@@ -78,8 +78,41 @@ class ProjectWizardDialog(QDialog):
         self.accept()
 
     def import_project(self):
-        QMessageBox.information(
+        source_dir = QFileDialog.getExistingDirectory(self, "Select Obsidian Vault or Folder to Import")
+        if not source_dir:
+            return
+            
+        reply = QMessageBox.question(
             self, "Import Project", 
-            "To import an Obsidian Vault or external files, please first create a New Project or load an empty one, then use the Import buttons in the main application."
+            f"Do you want to convert '{os.path.basename(source_dir)}' directly into a Worldsmith Project?\n\n(This will create a 'lore' folder and database inside it, and copy all your markdown files into the lore folder)",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        self.start_new_project()
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                db_path = os.path.join(source_dir, "lore_forge_world.db")
+                lore_dir = os.path.join(source_dir, "lore")
+                os.makedirs(lore_dir, exist_ok=True)
+                
+                import sqlite3
+                conn = sqlite3.connect(db_path)
+                conn.close()
+                
+                import shutil
+                copied = 0
+                for root, dirs, files in os.walk(source_dir):
+                    if os.path.abspath(root) == os.path.abspath(lore_dir):
+                        continue
+                    for file in files:
+                        if file.endswith(".md") or file.endswith(".txt"):
+                            src = os.path.join(root, file)
+                            dst = os.path.join(lore_dir, file)
+                            if not os.path.exists(dst):
+                                shutil.copy2(src, dst)
+                                copied += 1
+                
+                QMessageBox.information(self, "Import Complete", f"Successfully converted project and copied {copied} text notes into the lore folder.")
+                self.selected_project_dir = source_dir
+                self.accept()
+            except Exception as e:
+                QMessageBox.critical(self, "Import Error", f"Failed to import project: {e}")

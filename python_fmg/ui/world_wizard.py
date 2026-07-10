@@ -36,7 +36,7 @@ class FoundationPage(QWizardPage):
             except:
                 default_dir = os.path.expanduser("~")
         self.dir_input.setText(default_dir)
-        self.registerField("project_dir*", self.dir_input)
+        self.registerField("project_dir", self.dir_input)
         h_layout.addWidget(self.dir_input)
         
         btn_browse = QPushButton("Browse...")
@@ -75,7 +75,7 @@ class CosmologyPage(QWizardPage):
         layout.addWidget(QLabel("Cosmology Overview (e.g., A flat world on a turtle, A binary star system):"))
         self.cosmology_input = QTextEdit()
         self.cosmology_input.setPlaceholderText("Describe the physical laws, stars, gods, or creation myth...")
-        self.registerField("cosmology*", self.cosmology_input, "plainText")
+        self.registerField("cosmology", self.cosmology_input, "plainText")
         layout.addWidget(self.cosmology_input)
 
         layout.addWidget(QLabel("Geography Style:"))
