@@ -32,3 +32,8 @@ venv.bak/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# User Lore Data
+world_wiki/
+python_fmg/backups/
+

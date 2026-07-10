@@ -2290,9 +2290,9 @@ class WorldsmithMainWindow(QMainWindow):
             'border-left: 3px solid #04D361; max-width: 95%;">'
             '<span style="color: #04D361; font-weight: bold;">A </span>'
             '<b>Welcome to Worldsmith Sandbox!</b><br>'
-            "I am your co-author AI assistant. Let's start at the beginning — "
-            'tell me about your world concept, or ask me to detail a faction, region, '
-            'or lore entry from your current map data.'
+            "I am your analytical AI assistant. Let's start at the beginning - "
+            'tell me about your world concept, or ask me to audit your timeline for continuity, '
+            'help organize your lore, or point out gaps in your established facts.'
             '</span></div>'
         )
         self.ai_prompt_history.append(welcome_html)
@@ -2593,6 +2593,17 @@ class WorldsmithMainWindow(QMainWindow):
 # ENTRY POINT
 # =============================================================================
 def main():
+    import subprocess
+    try:
+        subprocess.Popen(
+            ["ollama", "serve"], 
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+    except Exception as e:
+        print(f"Warning: Could not start Ollama automatically: {e}")
+        
     app = QApplication(sys.argv)
     window = WorldsmithMainWindow()
     window.show()
