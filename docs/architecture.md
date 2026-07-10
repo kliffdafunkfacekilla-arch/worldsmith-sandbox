@@ -20,4 +20,4 @@ The UI is written entirely in PyQt6 (`python_fmg/main.py`). It consists of two m
 Data persistence for the world's lore is managed via a local SQLite database (`lore_forge_world.db`). When the user writes a note in the notebook, it is saved directly into the database.
 
 ## AI Workers (`OllamaPromptWorker`)
-Heavy LLM inference requests are completely detached from the Qt Event Loop. Found in `python_fmg/core/ai_worker.py`, these inherit from `QThread` to issue HTTP requests to the local Ollama server in the background, emitting Qt Signals when the response stream is ready.
+Heavy analytical LLM requests (for timeline auditing and lore organization) are completely detached from the Qt Event Loop. Found in `python_fmg/core/ai_worker.py`, these inherit from `QThread` to issue HTTP requests to the local Ollama server in the background, emitting Qt Signals when the analytical response stream is ready.

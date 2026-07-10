@@ -21,4 +21,4 @@ The left panel contains your Lore Forge. You can create interconnected Markdown 
 - **Audit Timeline**: The AI will read your currently open note against the rest of the database and alert you to any logical continuity errors or timeline paradoxes.
 
 ## Interacting with the AI
-At the bottom of the left panel, you'll find an AI chat terminal. Simply type a question or prompt and press Enter. The Worldsmith Assistant will stream a response utilizing your local Ollama installation, grounding its answers in your world's lore.
+At the bottom of the left panel, you'll find an AI chat terminal. Simply type a question or prompt and press Enter. The Worldsmith Assistant will utilize your local Ollama installation to analyze your existing lore, point out inconsistencies, and encourage you to flesh out missing details. It does not write or generate creative content for you—it simply helps organize and support your own creative writing process.

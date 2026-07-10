@@ -10,7 +10,7 @@ It aims to provide a unified environment for generating Voronoi-based terrain, s
 - **Interactive Map Canvas**: Fully interactable panning and zooming UI for viewing heightmaps, cultures, states, and relief icons.
 - **Magic Brushes**: Modify terrain, borders, and state ownership directly on the map.
 - **Lore Database**: Interconnected notes system backed by a local SQLite database (`lore_forge_world.db`).
-- **AI Integration**: Ask questions about your world, generate town names, or audit your timeline for continuity using Ollama.
+- **AI Integration**: The AI acts purely as an analytical assistant using Ollama. It audits your timeline for continuity, organizes your thoughts, and encourages new lore creation by identifying gaps. All creative writing is done entirely by you.
 
 ## Installation
 
