@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
     QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox,
     QSlider, QFileDialog, QDialog, QListWidget, QInputDialog, QCheckBox,
-    QFrame, QToolButton, QScrollArea, QMenu
+    QFrame, QToolButton, QScrollArea, QMenu, QTableWidget, QTableWidgetItem
 )
 from PyQt6.QtCore import Qt, QPointF, QPoint, pyqtSignal, QTimer
 from PyQt6.QtGui import (
@@ -1652,13 +1652,13 @@ class WorldsmithMainWindow(QMainWindow):
         self.cb_tools.setCurrentIndex(0)
 
         if tool_name == "Edit State":
-            editor = ElementEditorDialog("State", self.map_engine.states, self)
+            editor = DataTableEditor("State", self.map_engine.states, self)
             editor.exec()
         elif tool_name == "Edit Culture":
-            editor = ElementEditorDialog("Culture", self.map_engine.cultures, self)
+            editor = DataTableEditor("Culture", self.map_engine.cultures, self)
             editor.exec()
         elif tool_name == "Edit Religion":
-            editor = ElementEditorDialog("Religion", self.map_engine.religions, self)
+            editor = DataTableEditor("Religion", self.map_engine.religions, self)
             editor.exec()
         elif tool_name == "Add Burg":
             self.cb_brush_mode.setCurrentText("Burg Paint")
@@ -1768,8 +1768,9 @@ class WorldsmithMainWindow(QMainWindow):
             QMessageBox.critical(self, "Save Error", f"Failed to save world file: {e}")
 
     def trigger_world_regeneration(self):
-        self.statusBar.showMessage("Chaining all Azgaar port layers sequentially...")
+        self.statusBar.showMessage("Generating new map layout and chaining all simulation layers...")
         try:
+            self.map_engine.generate_voronoi_mesh()
             self.map_engine.run_heightmap_pipeline()
             self.map_engine.run_hydrology_rivers()
             self.map_engine.run_biomes_climate(wind_angle_deg=45)
@@ -2483,6 +2484,8 @@ class WorldsmithMainWindow(QMainWindow):
             """, (title, content))
             conn.commit()
             conn.close()
+            self.refresh_note_list()
+            self.cb_notes.setCurrentText(title)
             self.statusBar.showMessage(f"Note '{title}' saved. Running lore audit...")
 
             # Trigger asynchronous background lore consistency audit on save

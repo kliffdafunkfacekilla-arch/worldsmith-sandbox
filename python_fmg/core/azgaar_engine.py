@@ -111,7 +111,7 @@ class AzgaarEngine:
     100% complete Python recreation of Azgaar's Fantasy Map Generator pipeline logic
     upgraded to use a mathematically robust, high-performance irregular Voronoi mesh layout.
     """
-    def __init__(self, num_points=240, width=800, height=600):
+    def __init__(self, num_points=10000, width=800, height=600):
         self.num_points = num_points
         self.width = width
         self.height = height
@@ -128,7 +128,8 @@ class AzgaarEngine:
         self.zones = []
         
         self.name_gen = MarkovNameGenerator()
-        self.generate_voronoi_mesh()
+        # Voronoi mesh is no longer generated automatically on init.
+        # Call generate_voronoi_mesh() explicitly to create a new map.
 
     def generate_voronoi_mesh(self):
         np.random.seed(42)
@@ -194,6 +195,8 @@ class AzgaarEngine:
                 "is_aquatic": False,
                 "zone": 0
             })
+            
+        self._precompute_neighbors()
 
     def run_heightmap_pipeline(self):
         center_x, center_y = self.width / 2.0, self.height / 2.0
@@ -290,14 +293,17 @@ class AzgaarEngine:
                         river_id += 1
                     highest["r"] = cell["r"]
 
-    def get_neighbors(self, cell_idx):
-        neighbors = []
+    def _precompute_neighbors(self):
+        self._neighbors_map = {i: [] for i in range(self.num_points)}
         for point_pair in self.vor_mesh.ridge_points:
-            if cell_idx == point_pair[0]:
-                neighbors.append(int(point_pair[1]))
-            elif cell_idx == point_pair[1]:
-                neighbors.append(int(point_pair[0]))
-        return list(set(neighbors))
+            p1 = int(point_pair[0])
+            p2 = int(point_pair[1])
+            if p1 < self.num_points and p2 < self.num_points:
+                self._neighbors_map[p1].append(p2)
+                self._neighbors_map[p2].append(p1)
+
+    def get_neighbors(self, cell_idx):
+        return self._neighbors_map.get(cell_idx, [])
 
     def run_biomes_climate(self, wind_angle_deg=45):
         wind_rad = math.radians(wind_angle_deg)

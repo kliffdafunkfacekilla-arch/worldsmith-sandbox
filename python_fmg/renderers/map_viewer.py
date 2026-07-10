@@ -314,6 +314,10 @@ class MapViewerWidget(QWidget):
         painter.translate(self.pan_offset)
         painter.scale(self.zoom_factor, self.zoom_factor)
         
+        engine_width = self.parent.map_engine.width
+        engine_height = self.parent.map_engine.height
+        painter.setClipRect(QRectF(0, 0, engine_width, engine_height))
+        
         vor_mesh = self.parent.map_engine.vor_mesh
         cells = self.parent.map_engine.cells
         provinces_pool = self.parent.map_engine.provinces_pool
@@ -486,6 +490,7 @@ class MapViewerWidget(QWidget):
             painter.setPen(QPen(QColor("#000000"), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             for (p1_idx, p2_idx), v_indices in zip(vor_mesh.ridge_points, vor_mesh.ridge_vertices):
                 if -1 in v_indices: continue
+                if p1_idx >= len(cells) or p2_idx >= len(cells): continue
                 c1 = cells[p1_idx]
                 c2 = cells[p2_idx]
                 # Coastline if one is marine (<20) and other is land (>=20)
@@ -498,6 +503,7 @@ class MapViewerWidget(QWidget):
             # Bold colored lines separating political states
             for (p1_idx, p2_idx), v_indices in zip(vor_mesh.ridge_points, vor_mesh.ridge_vertices):
                 if -1 in v_indices: continue
+                if p1_idx >= len(cells) or p2_idx >= len(cells): continue
                 c1 = cells[p1_idx]
                 c2 = cells[p2_idx]
                 s1 = c1.get("state", 0)
