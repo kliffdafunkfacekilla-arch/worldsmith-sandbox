@@ -2057,11 +2057,68 @@ class WorldsmithMainWindow(QMainWindow):
         )
         self._update_session_progress()
         
+        self.process_spatial_seeding_from_imported_text()
+        
         # Now trigger the driver to find the first gap!
         genre = self.cb_genre.currentText() if hasattr(self, "cb_genre") else "Fantasy"
         self.driver_worker = AILoreDriverWorker(self.get_lore_dir(), genre=genre)
         self.driver_worker.prompt_ready.connect(self.handle_driver_prompt)
         self.driver_worker.start()
+
+    def process_spatial_seeding_from_imported_text(self):
+        """
+        Scans your newly ingested text notes in SQLite cache, extracts 
+        geographic parameters, and triggers a map re-simulation using the text data as anchors.
+        """
+        self.statusBar.showMessage("AI Extracting spatial rules from imported text...")
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT title, content FROM notes")
+            notes = [f"{title}: {content}" for title, content in cursor.fetchall()]
+            conn.close()
+            
+            combined_notes = "\n".join(notes)
+            
+            from python_fmg.core.ai_worker import AISpatialExtractorWorker
+            self.spatial_worker = AISpatialExtractorWorker(combined_notes)
+            self.spatial_worker.extraction_complete.connect(self.apply_spatial_rules_to_map)
+            self.spatial_worker.start()
+            
+        except Exception as e:
+            print(f"Spatial seeding bypass failure: {e}")
+
+    def apply_spatial_rules_to_map(self, rules_json_str):
+        self.statusBar.showMessage("Applying extracted spatial constraints to Map...")
+        import json
+        
+        try:
+            # Simple cleanup of markdown json block
+            clean_str = rules_json_str.strip()
+            if clean_str.startswith("```json"):
+                clean_str = clean_str[7:]
+            if clean_str.startswith("```"):
+                clean_str = clean_str[3:]
+            if clean_str.endswith("```"):
+                clean_str = clean_str[:-3]
+                
+            rules_list = json.loads(clean_str)
+            text_anchors = self.map_engine.solve_spatial_constraints(rules_list)
+            
+            # Re-run simulation pipeline with text parameters injected
+            self.map_engine.generate_voronoi_mesh()
+            self.map_engine.run_heightmap_pipeline(text_mined_anchors=text_anchors)
+            self.map_engine.run_hydrology_rivers()
+            self.map_engine.run_biomes_climate()
+            
+            # Sync back down to canvas layout
+            self.load_map_data_to_viewer()
+            self.statusBar.showMessage("Map reverse-engineered from text constraints successfully!")
+            
+        except Exception as e:
+            print(f"Failed to apply spatial constraints: {e}")
+            self.statusBar.showMessage("Failed to apply spatial constraints. See console.")
 
     def handle_driver_prompt(self, filepath, subheading, prompt_text):
         # We store the active prompt context so when the user replies, we can update it

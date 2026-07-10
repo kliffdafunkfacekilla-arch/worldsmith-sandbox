@@ -208,14 +208,89 @@ class AzgaarEngine:
             
         self._precompute_neighbors()
 
-    def run_heightmap_pipeline(self):
+    def solve_spatial_constraints(self, rules_list):
+        """
+        Takes a list of geographic rules, e.g. [{"id": "a", "type": "mountain", "constraints": [{"relation": "north_of", "target_id": "b"}]}]
+        and returns a text_anchors dictionary mapping cell_idx to height values.
+        """
+        anchors = {}
+        assigned_cells = {}
+        
+        # Helper to map type to height
+        def get_height_for_type(t):
+            t = t.lower()
+            if t == "mountain": return 85
+            if t == "ocean": return 5
+            if t == "desert": return 20
+            return 50
+
+        # Phase 1: Place unconstrained features
+        for rule in rules_list:
+            if not rule.get("constraints"):
+                import random
+                cell_idx = random.randint(0, len(self.cells) - 1)
+                assigned_cells[rule["id"]] = cell_idx
+                anchors[cell_idx] = get_height_for_type(rule.get("type", ""))
+
+        # Phase 2: Place constrained features (simplified single-pass)
+        for rule in rules_list:
+            if rule.get("constraints"):
+                placed = False
+                for constraint in rule["constraints"]:
+                    target_id = constraint.get("target_id")
+                    if target_id in assigned_cells:
+                        target_cell = self.cells[assigned_cells[target_id]]
+                        relation = constraint.get("relation")
+                        
+                        # Find a valid cell
+                        import random
+                        candidates = []
+                        for cell in self.cells:
+                            if relation == "north_of" and cell["y"] < target_cell["y"]: candidates.append(cell["i"])
+                            elif relation == "south_of" and cell["y"] > target_cell["y"]: candidates.append(cell["i"])
+                            elif relation == "east_of" and cell["x"] > target_cell["x"]: candidates.append(cell["i"])
+                            elif relation == "west_of" and cell["x"] < target_cell["x"]: candidates.append(cell["i"])
+                        
+                        if candidates:
+                            cell_idx = random.choice(candidates)
+                            assigned_cells[rule["id"]] = cell_idx
+                            anchors[cell_idx] = get_height_for_type(rule.get("type", ""))
+                            placed = True
+                            break
+                
+                # Phase 3 Fallback
+                if not placed:
+                    print(f"Could not place feature {rule.get('id')} based on constraints. Placing randomly.")
+                    import random
+                    cell_idx = random.randint(0, len(self.cells) - 1)
+                    assigned_cells[rule["id"]] = cell_idx
+                    anchors[cell_idx] = get_height_for_type(rule.get("type", ""))
+                    
+        return anchors
+
+    def run_heightmap_pipeline(self, text_mined_anchors=None):
+        """
+        Constructs the procedural heightmap matrix. If text_mined_anchors are passed 
+        from the folder importer, the noise generation function clamps its values 
+        to force mountains, oceans, and deserts to form exactly where the text says.
+        """
         center_x, center_y = self.width / 2.0, self.height / 2.0
         max_dist = math.sqrt(center_x**2 + center_y**2)
         
         seed_x = random.uniform(100.0, 5000.0)
         seed_y = random.uniform(100.0, 5000.0)
         
+        # Default anchor layout tracking map
+        anchors = text_mined_anchors or {}
+        
         for cell in self.cells:
+            c_idx = cell["i"]
+            
+            # Check if this coordinate coordinates map to a text-extracted constraint
+            if c_idx in anchors:
+                cell["h"] = anchors[c_idx]
+                continue # Lock in coordinate value and skip noise blending
+                
             nx = (cell["x"] / self.width) + seed_x
             ny = (cell["y"] / self.height) + seed_y
             
@@ -233,8 +308,7 @@ class AzgaarEngine:
             island_mask = max(0.0, min(1.0, island_mask))
             
             final_h = (noise_factor * 0.6) + (island_mask * 60.0)
-            clamped_h = int(max(5, min(98, final_h)))
-            cell["h"] = clamped_h
+            cell["h"] = int(max(5, min(98, final_h)))
 
     def apply_height_brush(self, center_idx, radius, tool_mode, intensity=5):
         visited = {center_idx}

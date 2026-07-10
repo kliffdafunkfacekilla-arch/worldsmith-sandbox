@@ -477,3 +477,50 @@ class AILoreDriverWorker(QThread):
                     self.prompt_ready.emit(target_file, target_subheading, result)
         except Exception as e:
             print(f"AILoreDriverWorker error: {e}")
+
+class AISpatialExtractorWorker(QThread):
+    extraction_complete = pyqtSignal(str) # JSON string array
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, notes_content, model="qwen2.5:latest"):
+        super().__init__()
+        self.notes_content = notes_content
+        self.model = model
+
+    def run(self):
+        try:
+            system_prompt = (
+                "You are a strict data extraction system for a map generator."
+                "You must read the following notes and output a STRICT JSON array of objects representing geographical features.\n"
+                "EACH object must have: \n"
+                "- 'id': A unique string id.\n"
+                "- 'type': The type of feature ('mountain', 'desert', 'ocean', 'forest', 'lake').\n"
+                "- 'constraints': A list of constraint objects, e.g. [{'relation': 'north_of', 'target_id': 'some_other_id'}].\n"
+                "Valid relations: 'north_of', 'south_of', 'east_of', 'west_of'.\n"
+                "ONLY output valid JSON. No markdown, no explanations."
+            )
+
+            import urllib.request
+            import json
+
+            data = json.dumps({
+                "model": self.model,
+                "prompt": f"System: {system_prompt}\n\nUser: Extract from these notes:\n{self.notes_content}",
+                "stream": False,
+                "format": "json"
+            }).encode("utf-8")
+
+            req = urllib.request.Request(
+                "http://localhost:11434/api/generate",
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+
+            with urllib.request.urlopen(req, timeout=120) as response:
+                resp_data = json.loads(response.read().decode("utf-8"))
+                result = resp_data.get("response", "").strip()
+                self.extraction_complete.emit(result)
+                
+        except Exception as e:
+            self.error_occurred.emit(str(e))
