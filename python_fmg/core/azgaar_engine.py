@@ -262,36 +262,28 @@ class AzgaarEngine:
             cell["fl"] = cell["prec"]
             
         sorted_land = sorted([c for c in self.cells if c["h"] >= 20], key=lambda x: x["h"], reverse=True)
-        sorted_sea = sorted([c for c in self.cells if c["h"] < 20], key=lambda x: x["h"])
         
         river_id = 1
         for cell in sorted_land:
             neighbors = self.get_neighbors(cell["i"])
-            valid_neighbors = [self.cells[n] for n in neighbors if self.cells[n]["h"] >= 20]
+            # Must consider all neighbors (including sea) so water can drain into the ocean
+            valid_neighbors = [self.cells[n] for n in neighbors]
             if not valid_neighbors:
                 continue
             lowest = min(valid_neighbors, key=lambda c: c["h"])
+            
+            # Flow down to the lowest neighbor
             if lowest["h"] < cell["h"]:
                 lowest["fl"] += cell["fl"]
+                
+                # If enough flux accumulates, it becomes a river
                 if cell["fl"] > 35:
                     if cell["r"] == 0:
                         cell["r"] = river_id
                         river_id += 1
-                    lowest["r"] = cell["r"]
-
-        for cell in sorted_sea:
-            neighbors = self.get_neighbors(cell["i"])
-            valid_neighbors = [self.cells[n] for n in neighbors if self.cells[n]["h"] < 20]
-            if not valid_neighbors:
-                continue
-            highest = max(valid_neighbors, key=lambda c: c["h"])
-            if highest["h"] > cell["h"]:
-                highest["fl"] += cell["fl"]
-                if cell["fl"] > 35:
-                    if cell["r"] == 0:
-                        cell["r"] = river_id
-                        river_id += 1
-                    highest["r"] = cell["r"]
+                    # Only extend the river ID if the destination is also land
+                    if lowest["h"] >= 20:
+                        lowest["r"] = cell["r"]
 
     def _precompute_neighbors(self):
         self._neighbors_map = {i: [] for i in range(self.num_points)}

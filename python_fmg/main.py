@@ -8,24 +8,25 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
     QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox,
     QSlider, QFileDialog, QDialog, QListWidget, QInputDialog, QCheckBox,
-    QFrame, QToolButton, QScrollArea, QMenu, QTableWidget, QTableWidgetItem
+    QFrame, QToolButton, QScrollArea, QMenu, QTableWidget, QTableWidgetItem, QCompleter, QTreeView
 )
-from PyQt6.QtCore import Qt, QPointF, QPoint, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QPointF, QPoint, pyqtSignal, QTimer, QDir
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QFont, QPixmap,
-    QTextCursor, QTextCharFormat
+    QTextCursor, QTextCharFormat, QFileSystemModel
 )
 
 # Add project root directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from python_fmg.core.ai_worker import OllamaPromptWorker, LoreAuditWorker
+from python_fmg.core.ai_worker import OllamaPromptWorker, LoreAuditWorker, AILoreIngestor, AILoreDriverWorker
 from python_fmg.renderers.map_viewer import MapViewerWidget
 from python_fmg.renderers.notebook_editor import MarkdownNotebookEditor
 from python_fmg.core.azgaar_engine import AzgaarEngine, CosmosEngine
 from python_fmg.core.wiki_compiler import WikiCompiler
 from python_fmg.renderers.celestial_widget import CelestialPreviewWidget
 from python_fmg.core.template_manager import TemplateManager
+from python_fmg.ui.map_binding import MapBindingDialog
 from python_fmg.core.emblem_generator import EmblemGenerator
 from python_fmg.core.burg_generator import BurgGenerator
 
@@ -602,14 +603,17 @@ class BrushSettingsWidget(QWidget):
 # =============================================================================
 class WorldsmithMainWindow(QMainWindow):
 
-    def __init__(self):
+    def __init__(self, project_dir):
         super().__init__()
-        self.setWindowTitle("Worldsmith Sandbox - Fantasy World Builder")
+        self.project_dir = os.path.abspath(project_dir)
+        project_name = os.path.basename(self.project_dir)
+        self.setWindowTitle(f"Worldsmith Sandbox - {project_name}")
         self.resize(1600, 950)
+        self.setStyleSheet("background: #111116; color: #EEEEF8;")
         self.start_ollama_server()
 
-        # --- Backend Initialization ---
-        self.db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "lore_forge_world.db"))
+        # --- Base Data Paths ---
+        self.db_path = os.path.join(self.project_dir, "lore_forge_world.db")
         self.ai_worker    = None
         self.audit_worker = None
         self.selected_cell_idx = None
@@ -679,12 +683,13 @@ class WorldsmithMainWindow(QMainWindow):
         self.cb_tools.hide()
 
         # --- Build Panels ---
+        self._build_file_tree_panel()
         self._build_map_panel()
         self._build_writing_panel()
         self._build_ai_panel()
-
-        # Proportions: 35% Map / 35% Writing / 30% AI
-        self.main_splitter.setSizes([560, 560, 480])
+        
+        # Set default splitter proportions (File Tree 15%, Map 35%, Writing 30%, AI 20%)
+        self.main_splitter.setSizes([240, 560, 480, 320])
 
         # --- Status Bar ---
         self.statusBar = QStatusBar()
@@ -882,6 +887,45 @@ class WorldsmithMainWindow(QMainWindow):
     # =========================================================================
     # PANEL BUILDERS
     # =========================================================================
+    def _build_file_tree_panel(self):
+        """Build Panel 0: File Browser for Lore Notes."""
+        container = QWidget()
+        container.setObjectName("FileTreePanel")
+        container.setStyleSheet("background: #1e1e2c; border: none;")
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+        
+        lbl = QLabel("Lore Directory")
+        lbl.setStyleSheet("color: #D8D8EC; font-weight: bold; font-size: 13px; padding: 4px;")
+        
+        self.file_model = QFileSystemModel()
+        lore_dir = self.get_lore_dir()
+        if not os.path.exists(lore_dir):
+            os.makedirs(lore_dir)
+        self.file_model.setRootPath(lore_dir)
+        
+        self.file_tree = QTreeView()
+        self.file_tree.setModel(self.file_model)
+        self.file_tree.setRootIndex(self.file_model.index(lore_dir))
+        self.file_tree.setAnimated(True)
+        self.file_tree.setIndentation(15)
+        self.file_tree.setSortingEnabled(True)
+        
+        # Hide standard columns like size, type, date modified
+        self.file_tree.setColumnHidden(1, True)
+        self.file_tree.setColumnHidden(2, True)
+        self.file_tree.setColumnHidden(3, True)
+        self.file_tree.setHeaderHidden(True)
+        self.file_tree.setStyleSheet("QTreeView { color: #E0E0E0; background: #111116; border: 1px solid #404060; border-radius: 4px; }")
+        
+        self.file_tree.clicked.connect(self.on_file_tree_clicked)
+        
+        layout.addWidget(lbl)
+        layout.addWidget(self.file_tree)
+        
+        self.main_splitter.addWidget(container)
+
     def _build_map_panel(self):
         """Build Panel 1: Map View & Editor with icon sidebar, layer list, floating tools."""
 
@@ -1232,21 +1276,20 @@ class WorldsmithMainWindow(QMainWindow):
         div.setStyleSheet("background: #29292E; max-height: 1px;")
         note_layout.addWidget(div)
 
-        # --- Note Selection & Title Input ---
+        # --- Note Title Input ---
         note_title_layout = QHBoxLayout()
         note_title_layout.setContentsMargins(10, 5, 10, 5)
         
-        self.cb_notes = QComboBox()
-        self.cb_notes.addItem("New Note...")
-        self.cb_notes.setFixedWidth(150)
-        self.cb_notes.currentTextChanged.connect(self.load_selected_note)
-        
         self.note_title_input = QLineEdit()
         self.note_title_input.setObjectName("NoteTitleInput")
-        self.note_title_input.setPlaceholderText("Note Title — Faction, Settlement, Region...")
-        
-        note_title_layout.addWidget(self.cb_notes)
+        self.note_title_input.setPlaceholderText("Note Title (e.g., 'Ostraka City')")
+        self.note_title_input.setStyleSheet("font-size: 16px; font-weight: bold; padding: 5px; background: #1a1a24; border: 1px solid #2a2a35;")
         note_title_layout.addWidget(self.note_title_input)
+        
+        self.btn_bind_map = QPushButton("📌 Bind to Map")
+        self.btn_bind_map.setStyleSheet("background: #04D361; color: black; font-weight: bold; padding: 5px 10px; border-radius: 4px;")
+        self.btn_bind_map.clicked.connect(self.open_bind_dialog)
+        note_title_layout.addWidget(self.btn_bind_map)
         
         note_layout.addLayout(note_title_layout)
 
@@ -1374,7 +1417,7 @@ class WorldsmithMainWindow(QMainWindow):
         # --- Input Area ---
         input_widget = QWidget()
         input_widget.setObjectName("AIInputArea")
-        input_widget.setFixedHeight(52)
+        # Removing fixed height so it scales to fit both rows of inputs
         input_l = QHBoxLayout(input_widget)
         input_l.setContentsMargins(10, 9, 10, 9)
         input_l.setSpacing(8)
@@ -1767,6 +1810,9 @@ class WorldsmithMainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Failed to save world file: {e}")
 
+    def get_lore_dir(self):
+        return os.path.join(self.project_dir, "lore")
+
     def trigger_world_regeneration(self):
         self.statusBar.showMessage("Generating new map layout and chaining all simulation layers...")
         try:
@@ -1819,6 +1865,14 @@ class WorldsmithMainWindow(QMainWindow):
                     note_id INTEGER,
                     cell_idx INTEGER UNIQUE,
                     FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS markdown_map_bindings (
+                    title TEXT PRIMARY KEY,
+                    bind_type TEXT,
+                    bind_target TEXT,
+                    cell_idx INTEGER
                 )
             """)
             conn.commit()
@@ -1900,49 +1954,68 @@ class WorldsmithMainWindow(QMainWindow):
         if not file_path:
             return
 
-        try:
-            title = os.path.splitext(os.path.basename(file_path))[0]
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-
-            self.note_title_input.setText(title)
-            self.note_editor.setPlainText(content)
-            self.save_current_note()
-            self.refresh_note_list()
-            self.cb_notes.setCurrentText(title)
-            QMessageBox.information(self, "Import Successful", f"Note '{title}' imported and digested by Worldsmith AI.")
-        except Exception as e:
-            QMessageBox.critical(self, "Import Error", f"Failed to import file: {e}")
+        self.start_ingestion([file_path])
 
     def import_external_folder(self):
         dir_path = QFileDialog.getExistingDirectory(self, "Select Folder to Import Notes")
         if not dir_path:
             return
             
-        imported_count = 0
-        try:
-            for filename in os.listdir(dir_path):
-                if filename.endswith(".md") or filename.endswith(".txt"):
-                    file_path = os.path.join(dir_path, filename)
-                    title = os.path.splitext(filename)[0]
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                        
-                    conn = sqlite3.connect(self.db_path)
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO notes (title, content, updated_at)
-                        VALUES (?, ?, CURRENT_TIMESTAMP)
-                        ON CONFLICT(title) DO UPDATE SET content=excluded.content, updated_at=CURRENT_TIMESTAMP
-                    """, (title, content))
-                    conn.commit()
-                    conn.close()
-                    imported_count += 1
-            
-            self.refresh_note_list()
-            QMessageBox.information(self, "Import Successful", f"Successfully imported {imported_count} notes from folder.")
-        except Exception as e:
-            QMessageBox.critical(self, "Import Error", f"Failed to import folder: {e}")
+        file_list = []
+        for filename in os.listdir(dir_path):
+            if filename.endswith(".md") or filename.endswith(".txt"):
+                file_path = os.path.join(dir_path, filename)
+                file_list.append(file_path)
+                
+        if file_list:
+            self.start_ingestion(file_list)
+
+    def start_ingestion(self, file_list):
+        genre = self.cb_genre.currentText() if hasattr(self, "cb_genre") else "Fantasy"
+        self.ingestor_worker = AILoreIngestor(file_list, self.db_path, self.get_lore_dir(), genre=genre)
+        self.ingestor_worker.progress_update.connect(self.handle_ingestion_progress)
+        self.ingestor_worker.ingestion_complete.connect(self.handle_ingestion_complete)
+        self.ingestor_worker.start()
+        self.statusBar.showMessage(f"Starting ingestion of {len(file_list)} files...")
+
+    def handle_ingestion_progress(self, current, total, filename):
+        self.statusBar.showMessage(f"Ingesting {current}/{total}: {filename}...")
+
+    def handle_ingestion_complete(self):
+        self.statusBar.showMessage("AI Ingestion Complete!")
+        self.populate_file_tree()
+        self.ai_prompt_history.append(
+            f'<div style="text-align: left; margin: 2px 30px 6px 4px;">'
+            f'<span style="display: inline-block; background: #1a1a2c; color: #D8D8EC; '
+            f'border-radius: 14px 14px 14px 2px; padding: 7px 13px; font-size: 12px; '
+            f'border-left: 3px solid #04D361;">'
+            f'<span style="color: #04D361; font-weight: bold;">A</span> [System] I have successfully categorized and ingested the recent files. Check the file browser to see them organized.'
+            f'</span></div>'
+        )
+        self._update_session_progress()
+        
+        # Now trigger the driver to find the first gap!
+        genre = self.cb_genre.currentText() if hasattr(self, "cb_genre") else "Fantasy"
+        self.driver_worker = AILoreDriverWorker(self.get_lore_dir(), genre=genre)
+        self.driver_worker.prompt_ready.connect(self.handle_driver_prompt)
+        self.driver_worker.start()
+
+    def handle_driver_prompt(self, filepath, subheading, prompt_text):
+        # We store the active prompt context so when the user replies, we can update it
+        self.pending_driver_file = filepath
+        self.pending_driver_subheading = subheading
+        
+        filename = os.path.basename(filepath)
+        title = os.path.splitext(filename)[0]
+        self.ai_prompt_history.append(
+            f'<div style="text-align: left; margin: 2px 30px 6px 4px;">'
+            f'<span style="display: inline-block; background: #1a1a2c; color: #D8D8EC; '
+            f'border-radius: 14px 14px 14px 2px; padding: 7px 13px; font-size: 12px; '
+            f'border-left: 3px solid #E63946;">'
+            f'<span style="color: #E63946; font-weight: bold;">A</span> <b>[Missing Info in {title}]</b><br/>{prompt_text}'
+            f'</span></div>'
+        )
+        self._update_session_progress()
 
     def change_magic_brush(self, brush_name):
         self.map_viewer.active_paint_magic = brush_name
@@ -1979,9 +2052,81 @@ class WorldsmithMainWindow(QMainWindow):
         self.lore_prompt_worker.start()
 
     def handle_cell_clicked(self, idx):
+        # 1. Check if we are in Marker Placement Mode
+        if hasattr(self, "pending_marker_title") and self.pending_marker_title:
+            try:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO markdown_map_bindings (title, bind_type, bind_target, cell_idx)
+                    VALUES (?, 'marker', NULL, ?)
+                """, (self.pending_marker_title, idx))
+                conn.commit()
+                conn.close()
+                self.statusBar.showMessage(f"Marker placed for '{self.pending_marker_title}' at Cell {idx}.")
+                self.pending_marker_title = None
+                self.map_viewer.setCursor(Qt.CursorShape.ArrowCursor)
+                self.load_map_data_to_viewer()
+                self.map_viewer.update() # trigger repaint to show marker
+            except Exception as e:
+                print(f"Error saving marker: {e}")
+            return
+            
         self.handle_cell_painted(idx)
         self.check_active_lore_prompt(idx)
         
+        # 2. Check if there's a Note bound to this cell/entity
+        self.check_map_note_bindings(idx)
+
+    def check_map_note_bindings(self, idx):
+        cell = self.map_engine.cells[idx]
+        state_id = cell.get("state", 0)
+        burg_id = cell.get("burg", 0)
+        rel_id = cell.get("religion", 0)
+        cult_id = cell.get("culture", 0)
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            linked_titles = set()
+            
+            # Check markers on this specific cell first
+            cursor.execute("SELECT title FROM markdown_map_bindings WHERE bind_type='marker' AND cell_idx=?", (idx,))
+            for row in cursor.fetchall():
+                linked_titles.add(row[0])
+            
+            # Check entities belonging to this cell
+            targets = []
+            if state_id > 0: targets.append(('state', str(state_id)))
+            if burg_id > 0: targets.append(('burg', str(burg_id)))
+            if rel_id > 0: targets.append(('religion', str(rel_id)))
+            if cult_id > 0: targets.append(('culture', str(cult_id)))
+            
+            if targets:
+                query_parts = " OR ".join(["(bind_type=? AND bind_target=?)"] * len(targets))
+                params = []
+                for t_type, t_val in targets:
+                    params.extend([t_type, t_val])
+                    
+                cursor.execute(f"SELECT title FROM markdown_map_bindings WHERE {query_parts}", params)
+                for row in cursor.fetchall():
+                    linked_titles.add(row[0])
+                    
+            conn.close()
+            
+            if linked_titles:
+                menu = QMenu(self)
+                menu.setStyleSheet("QMenu { background: #1e1e2c; border: 1px solid #404060; color: #D0D0E0; border-radius: 4px; padding: 4px 0; } QMenu::item { padding: 6px 16px; } QMenu::item:selected { background: #29293a; color: #04D361; }")
+                for title in sorted(list(linked_titles)):
+                    action = menu.addAction(f"📄 {title}")
+                    action.triggered.connect(lambda checked, t=title: self.load_selected_note(t))
+                
+                from PyQt6.QtGui import QCursor
+                menu.exec(QCursor.pos())
+                
+        except Exception as e:
+            print(f"Error checking map bindings: {e}")
     def check_active_lore_prompt(self, idx):
         if not hasattr(self, "chk_active_prompts") or not self.chk_active_prompts.isChecked():
             return
@@ -2263,9 +2408,13 @@ class WorldsmithMainWindow(QMainWindow):
             cursor.execute("SELECT cell_idx, magic_type FROM magic_layers")
             for cell_idx, m_type in cursor.fetchall():
                 self.map_viewer.magic_data[cell_idx] = m_type
+                
+            cursor.execute("SELECT cell_idx, title FROM markdown_map_bindings WHERE bind_type='marker'")
+            self.map_viewer.markdown_markers = cursor.fetchall()
+            
             conn.close()
         except:
-            pass
+            self.map_viewer.markdown_markers = []
 
         for cell in self.map_engine.cells:
             cell_idx = cell["i"]
@@ -2317,66 +2466,70 @@ class WorldsmithMainWindow(QMainWindow):
             pass
 
     def refresh_note_list(self):
-        self.cb_notes.blockSignals(True)
-        self.cb_notes.clear()
-        self.cb_notes.addItem("New Note...")
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Add drafts first
-            cursor.execute("SELECT id, title FROM lore_drafts ORDER BY id DESC")
-            for row in cursor.fetchall():
-                self.cb_notes.addItem(f"[DRAFT] {row[1]}")
+        pass
+
+    def on_file_tree_clicked(self, index):
+        file_path = self.file_model.filePath(index)
+        if not self.file_model.isDir(index) and (file_path.endswith('.md') or file_path.endswith('.txt')):
+            title = os.path.splitext(os.path.basename(file_path))[0]
+            # Auto-save current if needed
+            if getattr(self, "current_note_file_path", None) or getattr(self, "current_loaded_draft_id", None):
+                self.save_current_note()
                 
-            # Then canonical notes
-            cursor.execute("SELECT title FROM notes ORDER BY title ASC")
-            for row in cursor.fetchall():
-                self.cb_notes.addItem(row[0])
-            conn.close()
-        except:
-            pass
-        self.cb_notes.blockSignals(False)
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            
+            self.current_note_file_path = file_path
+            self.current_loaded_draft_id = None
+            self.staging_action_widget.setVisible(False)
+            self.note_title_input.setText(title)
+            self.note_editor.setPlainText(content)
+            self.statusBar.showMessage(f"Loaded note '{title}' from filesystem.")
 
     def load_selected_note(self, title):
+        # Auto-save the currently open note (if any) before we overwrite the editor
+        if getattr(self, "current_note_file_path", None) or getattr(self, "current_loaded_draft_id", None):
+            self.save_current_note()
+
         self.current_loaded_draft_id = None
         self.staging_action_widget.setVisible(False)
         
         if title == "New Note..." or not title:
             self.note_title_input.clear()
             self.note_editor.clear()
-            self.current_note_id = None
+            self.current_note_file_path = None
             return
 
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
             if title.startswith("[DRAFT] "):
                 clean_title = title.replace("[DRAFT] ", "", 1)
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
                 cursor.execute("SELECT id, title, content FROM lore_drafts WHERE title = ?", (clean_title,))
                 row = cursor.fetchone()
                 if row:
                     self.current_loaded_draft_id = row[0]
                     self.note_title_input.setText(row[1])
                     self.note_editor.setPlainText(row[2])
-                    self.current_note_id = None
+                    self.current_note_file_path = None
                     self.staging_action_widget.setVisible(True)
                     self.statusBar.showMessage(f"Loaded draft '{clean_title}'.")
+                conn.close()
             else:
-                cursor.execute("SELECT id, content FROM notes WHERE title = ?", (title,))
-                row = cursor.fetchone()
-                if row:
-                    self.current_note_id = row[0]
+                # Load from file system
+                lore_dir = self.get_lore_dir()
+                file_path = os.path.join(lore_dir, f"{title}.md")
+                if os.path.exists(file_path):
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    self.current_note_file_path = file_path
                     self.note_title_input.setText(title)
-                    self.note_editor.setPlainText(row[1])
-                    self.statusBar.showMessage(f"Loaded note '{title}'.")
-            conn.close()
+                    self.note_editor.setPlainText(content)
+                    self.statusBar.showMessage(f"Loaded note '{title}' from filesystem.")
         except Exception as e:
             self.statusBar.showMessage(f"Error loading note: {e}")
 
     def handle_link_clicked(self, link_title):
-        self.cb_notes.setCurrentText(link_title)
         self.load_selected_note(link_title)
 
     def send_ai_prompt(self):
@@ -2399,6 +2552,39 @@ class WorldsmithMainWindow(QMainWindow):
 
         system_instr = None
         self.is_saving_lore_note = None
+        
+        if hasattr(self, "pending_driver_file") and self.pending_driver_file:
+            # User is answering an active gap question. Update the file!
+            try:
+                filepath = self.pending_driver_file
+                subheading = self.pending_driver_subheading
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # Replace the first instance of [NEEDS_DETAIL] under this subheading with user's text
+                # We can just replace the exact text `[NEEDS_DETAIL]` since the file is targeted.
+                content = content.replace('[NEEDS_DETAIL]', f"{user_text.strip()}", 1)
+                
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                
+                self.statusBar.showMessage(f"Updated {os.path.basename(filepath)} with new details.")
+                self.populate_file_tree()
+                
+                # Clear pending and trigger driver again to find the next gap
+                self.pending_driver_file = None
+                self.pending_driver_subheading = None
+                
+                genre = self.cb_genre.currentText() if hasattr(self, "cb_genre") else "Fantasy"
+                self.driver_worker = AILoreDriverWorker(self.get_lore_dir(), genre=genre)
+                self.driver_worker.prompt_ready.connect(self.handle_driver_prompt)
+                self.driver_worker.start()
+                
+                self.btn_send_prompt.setEnabled(True)
+                return
+            except Exception as e:
+                print(f"Error saving detail to file: {e}")
+                
         if hasattr(self, "pending_active_entity") and self.pending_active_entity:
             # User is answering the prompt. Save their exact text!
             try:
@@ -2469,6 +2655,30 @@ class WorldsmithMainWindow(QMainWindow):
         )
         self.statusBar.showMessage("AI communication error.")
         self.btn_send_prompt.setEnabled(True)
+    def open_bind_dialog(self):
+        title = self.note_title_input.text().strip()
+        if not title:
+            QMessageBox.warning(self, "Missing Title", "Please provide a title for the note before binding.")
+            return
+            
+        dialog = MapBindingDialog(self.db_path, self.map_engine, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            if dialog.bind_mode == 'entity':
+                # Save to database
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO markdown_map_bindings (title, bind_type, bind_target, cell_idx)
+                    VALUES (?, ?, ?, NULL)
+                """, (title, dialog.bind_type, dialog.bind_target))
+                conn.commit()
+                conn.close()
+                QMessageBox.information(self, "Bound to Map", f"Successfully bound note '{title}' to {dialog.bind_type}!")
+                
+            elif dialog.bind_mode == 'marker':
+                self.statusBar.showMessage("Click on the map to place your custom marker.")
+                self.map_viewer.setCursor(Qt.CursorShape.CrossCursor)
+                self.pending_marker_title = title
 
     def save_current_note(self):
         title   = self.note_title_input.text().strip()
@@ -2479,17 +2689,15 @@ class WorldsmithMainWindow(QMainWindow):
             return
 
         try:
-            conn   = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO notes (title, content, updated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(title) DO UPDATE SET content=excluded.content, updated_at=CURRENT_TIMESTAMP
-            """, (title, content))
-            conn.commit()
-            conn.close()
-            self.refresh_note_list()
-            self.cb_notes.setCurrentText(title)
+            file_path = getattr(self, "current_note_file_path", None)
+            if not file_path:
+                lore_dir = self.get_lore_dir()
+                file_path = os.path.join(lore_dir, f"{title}.md")
+                self.current_note_file_path = file_path
+                
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content)
+                
             self.statusBar.showMessage(f"Note '{title}' saved. Running lore audit...")
 
             # Trigger asynchronous background lore consistency audit on save
@@ -2572,7 +2780,7 @@ class WorldsmithMainWindow(QMainWindow):
             
             self.refresh_note_list()
             self.statusBar.showMessage(f"Committed '{title}' to canonical lore!")
-            self.cb_notes.setCurrentText(title) # Switch to the committed note
+            self.load_selected_note(title) # Switch to the committed note
         except Exception as e:
             QMessageBox.critical(self, "Commit Error", f"Failed to commit lore: {e}")
 
@@ -2587,7 +2795,7 @@ class WorldsmithMainWindow(QMainWindow):
             conn.commit()
             conn.close()
             self.refresh_note_list()
-            self.cb_notes.setCurrentText("New Note...")
+            self.load_selected_note("New Note...")
             self.statusBar.showMessage("Draft discarded.")
         except Exception as e:
             print(f"Error discarding draft: {e}")
@@ -2603,13 +2811,19 @@ def main():
             ["ollama", "serve"], 
             creationflags=subprocess.CREATE_NO_WINDOW
         )
-    except Exception as e:
-        print(f"Warning: Could not start Ollama automatically: {e}")
-        
+    except FileNotFoundError:
+        print("Ollama not found. The AI features will be unavailable.")
+
     app = QApplication(sys.argv)
-    window = WorldsmithMainWindow()
-    window.show()
-    sys.exit(app.exec())
+    
+    from python_fmg.ui.project_wizard import ProjectWizardDialog
+    wizard = ProjectWizardDialog()
+    if wizard.exec() == QDialog.DialogCode.Accepted and wizard.selected_project_dir:
+        window = WorldsmithMainWindow(wizard.selected_project_dir)
+        window.show()
+        sys.exit(app.exec())
+    else:
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()

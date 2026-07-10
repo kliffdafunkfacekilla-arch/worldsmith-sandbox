@@ -25,15 +25,23 @@ class TemplateManager:
             
             # Populate default customizable templates
             default_templates = {
-                "Elevation (Map Layer)": ["Altitude Range", "Volcanic Activity", "Coastal Features"],
-                "Biomes (Map Layer)": ["Climate Zones", "Vegetation Types", "Nutrient Vectors"],
-                "Political States": ["Expansionism Rate", "Government Form", "Inhabitant Species (Beast-folk, Human, etc.)"],
-                "Provinces": ["Local Governors", "Taxation Rate", "Resources"],
-                "Religions": ["Deity Names", "Worship Style", "Holy Sites"],
-                "Cultures": ["Language Name", "Namebases", "Architecture Style"],
-                "Burgs": ["Trade Focus", "Population Cap", "City Map Layout"],
-                "Magic Layer": ["Magic Types", "Power Level", "Ley Line Density"],
-                "Technology": ["Tech Era", "Core Inventions", "Resource Dependencies"]
+                "History-Timeline": ["Era", "Major Events", "Key Figures"],
+                "Cosmology": ["Origin Myth", "Physical Laws", "Planes of Existence"],
+                "Magic-Powers": ["Rules", "Sources", "Limitations"],
+                "Tech": ["Tech Era", "Core Inventions", "Resource Dependencies"],
+                "Cultures": ["Traditions", "Values", "Taboos"],
+                "Kingdoms-Empires-Countries": ["Government", "Demographics", "Territory"],
+                "Factions-Organizations": ["Purpose", "Hierarchy", "Influence"],
+                "Species": ["Biology", "Lifespan", "Habitats"],
+                "Locations": ["Climate", "Geography", "Points of Interest"],
+                "People": ["Appearance", "Personality", "Background"],
+                "Religions": ["Deities", "Dogma", "Practices"],
+                "Items-Objects": ["Appearance", "Function", "History"],
+                "Flora": ["Environment", "Uses", "Hazards"],
+                "Fauna": ["Diet", "Behavior", "Abilities"],
+                "Economy": ["Currency", "Major Exports", "Wealth Distribution"],
+                "Ecology": ["Biomes", "Food Chains", "Climate Trends"],
+                "Meta": ["Themes", "Tropes", "Inspirations"]
             }
             
             for cat, fields in default_templates.items():

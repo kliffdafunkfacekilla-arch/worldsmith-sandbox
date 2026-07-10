@@ -19,6 +19,7 @@ class MapViewerWidget(QWidget):
         self.biomes_data = {}     
         self.factions_data = {}   
         self.magic_data = {}       
+        self.markdown_markers = []
         self.layer_mode = "Biomes"  # Default layer mode to Biomes to show off the tileset!
         self.active_paint_magic = "Wild Magic"  
         self.brush_mode = "Inspect" # Inspect, Magic, Height, State, Province, Culture, Religion, River, Burg
@@ -307,7 +308,7 @@ class MapViewerWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QBrush(QColor("#0d0d10")))
         
-        if not self.parent or not hasattr(self.parent, "map_engine"):
+        if not self.parent or not hasattr(self.parent, "map_engine") or not hasattr(self.parent.map_engine, "vor_mesh"):
             return
             
         painter.save()
@@ -627,8 +628,16 @@ class MapViewerWidget(QWidget):
 
         # Markers (Custom Points of Interest)
         if self.visibility_map.get("Markers", True):
-            for marker in self.parent.map_engine.markers if hasattr(self.parent.map_engine, "markers") else []:
-                cell = cells[marker["cell_idx"]]
+            # Combine engine markers and custom markdown markers
+            engine_markers = getattr(self.parent.map_engine, "markers", []) if self.parent and hasattr(self.parent, "map_engine") else []
+            markdown_markers = getattr(self, "markdown_markers", [])
+            all_markers = list(engine_markers) + [{"cell_idx": m[0], "title": m[1]} for m in markdown_markers]
+            
+            for marker in all_markers:
+                cell_idx = marker.get("cell_idx")
+                if cell_idx is None or cell_idx >= len(cells): continue
+                cell = cells[cell_idx]
+                
                 painter.save()
                 painter.translate(cell["x"], cell["y"])
                 painter.setBrush(QBrush(QColor("#ef4444")))
@@ -642,6 +651,7 @@ class MapViewerWidget(QWidget):
                 painter.setBrush(QBrush(QColor("#ffffff")))
                 painter.drawEllipse(QRectF(-2, -12, 4, 4))
                 painter.restore()
+
 
         painter.restore() # Reset pan/zoom transform before drawing UI overlays
 
