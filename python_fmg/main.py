@@ -697,7 +697,7 @@ class WorldsmithMainWindow(QMainWindow):
         self.cb_tools = QComboBox(self)
         self.cb_tools.addItems([
             "Tools", "Edit State", "Edit Culture", "Edit Religion",
-            "Add Burg", "Delete Selected Element"
+            "Add Burg", "Delete Selected Element", "Export Master Packages"
         ])
         self.cb_tools.currentTextChanged.connect(self.trigger_azgaar_tool_mode)
         self.cb_tools.hide()
@@ -1733,6 +1733,27 @@ class WorldsmithMainWindow(QMainWindow):
             self.statusBar.showMessage("Click on a cell to add a new settlement burg.")
         elif tool_name == "Delete Selected Element":
             self.statusBar.showMessage("Delete items from Element editor dropdown tables directly.")
+        elif tool_name == "Export Master Packages":
+            self.export_master_packages()
+
+    def export_master_packages(self):
+        try:
+            from python_fmg.core.export_engine import WorldsmithExportEngine
+            exporter = WorldsmithExportEngine(self)
+            
+            lore_dir = self.get_lore_dir()
+            geojson_path = os.path.join(lore_dir, "world_export.geojson")
+            
+            exporter.compile_geojson_framework(geojson_path)
+            
+            # Export context maps for the first few burgs
+            for burg in self.map_engine.burgs[:5]:
+                exporter.extract_cropped_context_map(burg["cell_idx"], lore_dir)
+                
+            self.statusBar.showMessage(f"Exported GIS data to {geojson_path} and cropped maps.")
+            QMessageBox.information(self, "Export Complete", "Master packages successfully generated.")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", f"Failed to export master packages: {e}")
 
     def toggle_layer_visibility(self, state):
         layer_name = self.cb_layer.currentText()
@@ -2304,6 +2325,8 @@ class WorldsmithMainWindow(QMainWindow):
                 target_json = json.loads(next_snap[1])
                 
             self.load_snapshot_data(target_json)
+            self.map_engine.patch_temporal_lifecycles(year)
+            self.map_viewer.update()
             
         except Exception as e:
             print(f"Error interpolating: {e}")

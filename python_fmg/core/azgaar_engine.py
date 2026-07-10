@@ -82,29 +82,39 @@ class CosmosEngine:
             
         return ambient_multiplier
 
-class MarkovNameGenerator:
-    """
-    Advanced Markov-Chain nomenclature class driven by the 6 expanded Ostraka seed pools.
-    """
+class AdvancedMarkovNameGenerator:
     def __init__(self):
-        self.configs = {
-            "Ostraka Mammalian": ["Snowpeak", "Viomuth", "Stagus", "Koda", "Daniaz", "Bramun", "Grooth", "Sturn", "Vulfen", "Hirthrost", "Kodmuth", "Shareg", "Muthurn", "Bramkoda", "Vulfrost", "Sturnden", "Grothun", "Muthrost", "Kodan", "Hirshmuth", "Staghirth", "Vulfmuth", "Oakhaven", "Whiskers", "Mungo", "Hargus", "Horgus", "Griss", "Hirth", "Bramm", "Oona", "Vulpus", "Simia", "Ailurus", "Vulparyn", "Tarsinus", "Shalach", "Lynari", "Zimax", "Felynx", "Shalari", "Tarsimax", "Vulpis", "Lynax", "Zilutes", "Charyb", "Simreach", "Ailuryn", "Vulpbough", "Tarsich", "Zylari", "Felynari", "Equus", "Stag", "Chipper", "Keth", "Forgerost"],
-            "Ostraka Reptilian": ["Carulkem", "Szarax", "Ignis", "Slush", "Skat", "Tiraton", "Grom", "Carulk", "Szaraxen", "Ignulkem", "Slussh", "Skatalon", "Grompit", "Tiratelon", "Carupit", "Szatalon", "Ignirax", "Sluax", "Skatgate", "Gromgate", "Carurax", "Lophex", "Rictus", "Vahn", "Eldra", "Frilled", "Skink", "Gromit", "Osmium", "Tungsten", "Titanium", "Bismuth", "Chromium", "Szamire", "Carulsh", "Ignisston", "Szaraxgate", "Tiratulkem", "Slushpit", "Skatalon", "Gromulsh", "Carulskat", "Szignis"],
-            "Ostraka Avian": ["Excelsis", "Aurelius", "Kaelos", "Hrothe", "Kaelen", "Vira", "Liora", "Lophex", "Krara", "Hrothes", "Caelios", "Skavax", "Kraeon", "Phraxos", "Traron", "Quorax", "Vauxit", "Tsarnth", "Phraeth", "Kracer", "Caelith", "Viraon", "Hrotham", "Skalor", "Fulcrum", "Aethel", "Erranith", "Condor", "Orestes", "Kaelon", "Phrax", "Roost", "Vanecon", "Skiff", "Aetherium", "Prism", "Summit", "Hrothit", "Caelrax", "Skavir", "Hrotheon", "Caelosnia", "Phraxosrix", "Viraeth", "Kraron", "Trarax", "Quorith", "Vauxos"],
-            "Ostraka Insectoid": ["Valkor", "Tyrustis", "Zeila", "Tyrzith", "Vthka", "Kuaix", "Slit", "Zca", "Xytis", "Chaka", "Tkmurex", "Slizith", "Vca", "Xyca", "Tyrka", "Ktis", "Murexca", "Zithka", "Slitk", "Xyzith", "Tyruaix", "Kthka", "Slca", "Tkzith", "Formica", "Mantis", "Scorpion", "Chitin", "Murex", "Quartz", "Zithis", "Xytk", "Tkatcon", "Slitex", "Vcon", "Xyda", "Tyrax", "Ktweb", "Murexis", "Zithweb", "Slitda", "Xytcon", "Tyrcon", "Ktext", "Murexta", "Zitht", "Slitcon", "Xyis"],
-            "Ostraka Aquatic": ["Cruorbus", "Boudreaux", "Gavusrix", "Jax", "Felix", "Moir", "Slumire", "Gavus", "Boudaux", "Vyrnax", "Gumbo", "Gavg glub", "Mirekin", "Vyrdaux", "Slugumbo", "Boudmire", "Gavkin", "Moirusrix", "Vyrusrix", "Glubkin", "Boudusrix", "Sludaux", "Undine", "Malaki", "Seahorse", "Whale", "Dolphin", "Snail", "Opalwallow", "Benthic", "Sumpkin", "Mire", "Cruor", "Aetheric", "Backwash", "Meander", "Vortex", "Delta", "Abyssal", "Pelagic", "Trench", "Shelf", "Coral", "Kelp"],
-            "Ostraka Botanical": ["Arbor", "Sylvan", "Vecelo", "Emerald", "Scar", "Roots", "Bough", "Glen", "Thicket", "Brambles", "Briar", "Yucca", "Cactus", "Tumbleweed", "Moonflower", "Grave-Root", "Arbor-Prime", "Sylvscar", "Vecelobough", "Emerglen", "Scarthicket", "Rootbrambles", "Briaryucca", "Cactusbough", "Tumbleglen", "Moonthicket", "Gravescar", "Arborbough", "Sylvglen", "Vecelothicket", "Emerbrambles", "Scaryucca", "Rootcactus", "Briartumble", "Cactusmoon", "Tumblegrave", "Moonglen"]
+        # Base phonetic components mapped to your 6 seed pools
+        self.syllables = {
+            "Ostraka Mammalian": {"prefixes": ["Thor", "Varn", "Kjal", "Bram"], "suffixes": ["burg", "fjord", "heim", "sted"]},
+            "Ostraka Reptilian": {"prefixes": ["Szar", "Ign", "Skat", "Grom"], "suffixes": ["kem", "rax", "lon", "pit"]},
+            "Ostraka Aquatic":   {"prefixes": ["Gav", "Vyr", "Moir", "Cruor"], "suffixes": ["glub", "daux", "mire", "kin"]},
+            "Ostraka Avian": {"prefixes": ["Kael", "Hroth", "Vira", "Skav"], "suffixes": ["os", "en", "ra", "ith"]},
+            "Ostraka Insectoid": {"prefixes": ["Valk", "Tyr", "Zeil", "Chak"], "suffixes": ["or", "tis", "ka", "ex"]},
+            "Ostraka Botanical": {"prefixes": ["Arb", "Syl", "Emer", "Bri"], "suffixes": ["or", "van", "ald", "ar"]}
         }
 
+    def generate_blended_border_name(self, primary_culture, neighbor_culture, blend_factor=0.25):
+        """
+        Procedurally constructs a geographic or settlement label.
+        If a city sits near a cultural boundary, it mutates phonetics 
+        from both morpheme groups based on geographic proximity.
+        """
+        p_pool = self.syllables.get(primary_culture, self.syllables["Ostraka Mammalian"])
+        n_pool = self.syllables.get(neighbor_culture, self.syllables["Ostraka Mammalian"])
+        
+        # Determine syllable roots using localized random selection fields
+        prefix = random.choice(p_pool["prefixes"])
+        suffix = random.choice(p_pool["suffixes"])
+        
+        if random.random() < blend_factor:
+            # Linguistic Mutation Drift occurs near borders
+            suffix = random.choice(n_pool["suffixes"])
+            
+        return f"{prefix}{suffix}".capitalize()
+
     def generate_name(self, profile_key):
-        # Generate word using segment pairs from seed arrays
-        pool = self.configs.get(profile_key, self.configs["Ostraka Mammalian"])
-        if not pool:
-            return "Ostraka"
-        words = random.sample(pool, min(2, len(pool)))
-        part1 = words[0][:len(words[0])//2]
-        part2 = words[1][len(words[1])//2:]
-        return (part1 + part2).capitalize()
+        return self.generate_blended_border_name(profile_key, profile_key, 0.0)
 
 class AzgaarEngine:
     """
@@ -410,6 +420,29 @@ class AzgaarEngine:
         # Recalculate the final Whittaker biomes matrix with our accurate physics arrays
         for cell in self.cells:
             self._assign_whittaker_biomes_for_cell(cell)
+    def patch_temporal_lifecycles(self, current_year):
+        """
+        Calculates historical state adjustments based on the timeline position.
+        Filters out settlements, roads, or armies whose historical existence 
+        falls outside the active simulation window.
+        """
+        # Step 1: Filter active settlements based on their operational history
+        # If a city article frontmatter dictates it was sacked or abandoned before current_year, cull it
+        active_burgs = []
+        for burg in self.burgs:
+            # Check for timeline restrictions inside properties
+            established = burg.get("founded_year", 1)
+            collapsed = burg.get("destroyed_year", 9999)
+            
+            if established <= current_year <= collapsed:
+                active_burgs.append(burg)
+                self.cells[burg["cell_idx"]]["burg"] = burg["id"]
+            else:
+                self.cells[burg["cell_idx"]]["burg"] = 0 # Erase from active canvas
+                
+        # Update engine runtime references dynamically
+        self.active_sim_burgs = active_burgs
+
     def _assign_whittaker_biomes_for_cell(self, cell):
         h = cell["h"]
         t = cell["temp"]

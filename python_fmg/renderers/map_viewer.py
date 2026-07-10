@@ -303,6 +303,24 @@ class MapViewerWidget(QWidget):
                 
         return closest_idx if min_dist < 40 else None
 
+    def apply_perception_mask(self, painter, cell_id, cell_x, cell_y, active_faction_view):
+        """
+        Enforces a regional 'Fog of War' mask. If the selected faction view 
+        has no documented historical awareness of these coordinate coordinates, 
+        it blocks rendering or masks descriptions behind an unreliable narrator filter.
+        """
+        if active_faction_view == "Scholar":
+            return False # Full access to geographical datasets
+            
+        # Commoner View: Obscure deep subterranean coordinate nodes and arcane leyline vectors
+        if active_faction_view == "Commoner":
+            cell_state = self.parent.map_engine.cells[cell_id]
+            if cell_state.get("h", 20) < 5 or self.layer_mode == "Magic Layer":
+                # Paint dark texture overlay across unknown territories
+                painter.setBrush(QBrush(QColor("#09090b")))
+                return True
+        return False
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -340,6 +358,12 @@ class MapViewerWidget(QWidget):
                 vert = vor_mesh.vertices[vert_idx]
                 path.lineTo(QPointF(float(vert[0]), float(vert[1])))
             path.closeSubpath()
+            
+            # Perception Filter Overlay Check
+            active_faction_view = getattr(self.parent, "active_faction_view", "Scholar")
+            if self.apply_perception_mask(painter, cell_id, cell["x"], cell["y"], active_faction_view):
+                painter.drawPath(path)
+                continue
             
             color = QColor("#27272a")
             if self.layer_mode == "Underworld & Crime" and self.visibility_map["Underworld & Crime"]:
