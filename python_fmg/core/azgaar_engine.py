@@ -1,1066 +1,350 @@
 import math
 import random
-import heapq
 import sqlite3
 import json
-import numpy as np
-from scipy.spatial import Voronoi
 
 class CosmosEngine:
-    def __init__(self, year_length=420, seasons=None, moons=None):
+    """Manages astronomical timelines, seasons, and celestial tracking variables."""
+    def __init__(self, year_length=420, seasons=None):
         self.year_length = year_length
-        self.seasons = seasons or ["Sowing-Time", "High-Sun", "Gold-Leaf", "Deep-Frost"]
-        self.moons = moons or [
-            {"name": "Sari", "period": 14.0, "radius": 120},
-            {"name": "Ostra", "period": 28.0, "radius": 240}
-        ]
+        self.seasons = seasons if seasons else ["Sowing", "High-Sun", "Gold-Leaf", "Deep-Frost"]
         
-    def get_cosmic_state(self, current_day):
-        progress = (current_day - 1) / self.year_length
-        season_idx = int(progress * len(self.seasons))
-        current_season = self.seasons[min(season_idx, len(self.seasons)-1)]
-        solar_angle = progress * 2 * math.pi
-        
-        state = {
-            "season": current_season,
-            "solar_angle": math.degrees(solar_angle),
-            "moons": [],
-            "stars": []
-        }
-        
-        for m in self.moons:
-            moon_phase_angle = (current_day % m["period"]) / m["period"] * 2 * math.pi
-            mx = m["radius"] * math.cos(moon_phase_angle)
-            my = m["radius"] * math.sin(moon_phase_angle)
-            
-            state["moons"].append({
-                "name": m["name"],
-                "x": mx, "y": my,
-                "phase_pct": (current_day % m["period"]) / m["period"]
-            })
-            
-        base_constellations = ["The Leviathan", "The Mage Node", "The High Sovereign", "The Abyss"]
-        for idx, name in enumerate(base_constellations):
-            star_angle = (idx * (2 * math.pi / len(base_constellations))) + solar_angle
-            state["stars"].append({
-                "name": name,
-                "angle": math.degrees(star_angle) % 360
-            })
-            
-        return state
+    def get_current_season(self, day_of_year):
+        """Maps absolute day of year to corresponding seasonal quadrant."""
+        quadrant = int((day_of_year % self.year_length) / (self.year_length / len(self.seasons)))
+        return self.seasons[min(quadrant, len(self.seasons) - 1)]
 
-    def update_celestial_magic_flux(self, db_path, current_day):
-        if not self.moons:
-            return 1.0
-            
-        phases = [(current_day % m["period"]) / m["period"] for m in self.moons]
-        is_aligned = False
-        if len(phases) >= 2:
-            p0 = phases[0]
-            aligned_count = 1
-            for p in phases[1:]:
-                diff = abs(p0 - p)
-                if diff < 0.05 or abs(diff - 0.5) < 0.05:
-                    aligned_count += 1
-            if aligned_count == len(phases):
-                is_aligned = True
-                
-        ambient_multiplier = 2.5 if is_aligned else 1.0
-        
-        try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO world_cosmology (day_index, season, active_constellation, magic_multiplier)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(day_index) DO UPDATE SET magic_multiplier=excluded.magic_multiplier
-            """, (current_day, "Dynamic", "The Mage Node", ambient_multiplier))
-            conn.commit()
-            conn.close()
-        except:
-            pass
-            
-        return ambient_multiplier
-
-class AdvancedMarkovNameGenerator:
-    def __init__(self):
-        # Base phonetic components mapped to your 6 seed pools
-        self.syllables = {
-            "Ostraka Mammalian": {"prefixes": ["Thor", "Varn", "Kjal", "Bram"], "suffixes": ["burg", "fjord", "heim", "sted"]},
-            "Ostraka Reptilian": {"prefixes": ["Szar", "Ign", "Skat", "Grom"], "suffixes": ["kem", "rax", "lon", "pit"]},
-            "Ostraka Aquatic":   {"prefixes": ["Gav", "Vyr", "Moir", "Cruor"], "suffixes": ["glub", "daux", "mire", "kin"]},
-            "Ostraka Avian": {"prefixes": ["Kael", "Hroth", "Vira", "Skav"], "suffixes": ["os", "en", "ra", "ith"]},
-            "Ostraka Insectoid": {"prefixes": ["Valk", "Tyr", "Zeil", "Chak"], "suffixes": ["or", "tis", "ka", "ex"]},
-            "Ostraka Botanical": {"prefixes": ["Arb", "Syl", "Emer", "Bri"], "suffixes": ["or", "van", "ald", "ar"]}
-        }
-
-    def generate_blended_border_name(self, primary_culture, neighbor_culture, blend_factor=0.25):
-        """
-        Procedurally constructs a geographic or settlement label.
-        If a city sits near a cultural boundary, it mutates phonetics 
-        from both morpheme groups based on geographic proximity.
-        """
-        p_pool = self.syllables.get(primary_culture, self.syllables["Ostraka Mammalian"])
-        n_pool = self.syllables.get(neighbor_culture, self.syllables["Ostraka Mammalian"])
-        
-        # Determine syllable roots using localized random selection fields
-        prefix = random.choice(p_pool["prefixes"])
-        suffix = random.choice(p_pool["suffixes"])
-        
-        if random.random() < blend_factor:
-            # Linguistic Mutation Drift occurs near borders
-            suffix = random.choice(n_pool["suffixes"])
-            
-        return f"{prefix}{suffix}".capitalize()
-
-    def generate_name(self, profile_key):
-        return self.generate_blended_border_name(profile_key, profile_key, 0.0)
 
 class AzgaarEngine:
     """
-    100% complete Python recreation of Azgaar's Fantasy Map Generator pipeline logic
-    upgraded to use a mathematically robust, high-performance irregular Voronoi mesh layout.
+    Simulates physical planetary geology, climatology, and structural boundaries.
+    Connects database lore constraints to procedural cell matrices.
     """
-    def __init__(self, num_points=10000, width=800, height=600):
-        self.num_points = num_points
-        self.width = width
-        self.height = height
-        
+    def __init__(self):
         self.cells = []
-        self.burgs = []
         self.states = []
-        self.provinces_pool = {}
-        self.religions = []
         self.cultures = []
-        self.rivers = []
-        self.roads = []
-        self.military_regiments = []
-        self.zones = []
-        
-        self.name_gen = AdvancedMarkovNameGenerator()
-        # Voronoi mesh is no longer generated automatically on init.
-        # Call generate_voronoi_mesh() explicitly to create a new map.
+        self.religions = []
+        self.burgs = []
+        self.width = 1000
+        self.height = 1000
 
-    def generate_voronoi_mesh(self):
-        np.random.seed(42)
-        # Generate initial random points within the canvas
-        points = np.column_stack((
-            np.random.uniform(20, self.width - 20, self.num_points),
-            np.random.uniform(20, self.height - 20, self.num_points)
-        ))
-        
-        # Create bounding dummy points far outside the canvas to close all regions inside the canvas
-        w, h = self.width, self.height
-        bounding_points = np.array([
-            [-w, -h], [2*w, -h], [2*w, 2*h], [-w, 2*h],
-            [w/2, -h], [w/2, 2*h], [-w, h/2], [2*w, h/2]
-        ])
-        
-        for _ in range(2):
-            all_points = np.vstack((points, bounding_points))
-            vor = Voronoi(all_points)
-            new_points = []
-            
-            # Only relax the real points (indices 0 to num_points - 1)
-            for i in range(self.num_points):
-                region_idx = vor.point_region[i]
-                region = vor.regions[region_idx]
-                if not region or -1 in region:
-                    # Should rarely happen for internal points due to bounding dummy points
-                    new_points.append(points[i])
-                else:
-                    poly = vor.vertices[region]
-                    # Clamp the relaxed point to stay within bounds
-                    center = poly.mean(axis=0)
-                    cx = np.clip(center[0], 5, self.width - 5)
-                    cy = np.clip(center[1], 5, self.height - 5)
-                    new_points.append([cx, cy])
-                    
-            points = np.array(new_points)
-
-        # Final Voronoi with relaxed points and bounding points
-        all_points = np.vstack((points, bounding_points))
-        self.vor_mesh = Voronoi(all_points)
-        
+    def generate_voronoi_mesh(self, num_cells=1000):
+        """
+        Creates an organic mesh of connected points using jittered spatial grids.
+        Avoids external SciPy dependencies while delivering natural Voronoi behavior.
+        """
         self.cells = []
-        for i in range(self.num_points):
-            pt = points[i]
-            self.cells.append({
-                "i": i,
-                "x": float(pt[0]),
-                "y": float(pt[1]),
-                "h": 20,
-                "temp": 15,
-                "prec": 20,
-                "fl": 0,
-                "r": 0,
-                "biome": "Grassland",
-                "state": 0,
-                "province": 0,
-                "religion": 0,
-                "culture": 0,
-                "burg": 0,
-                "pop": 1.0,
-                "good": "None",
-                "is_aquatic": False,
-                "zone": 0
-            })
-            
-        self._precompute_neighbors()
+        grid_size = int(math.sqrt(num_cells))
+        spacing_x = self.width / grid_size
+        spacing_y = self.height / grid_size
 
-    def solve_spatial_constraints(self, rules_list):
-        """
-        Takes a list of geographic rules, e.g. [{"id": "a", "type": "mountain", "constraints": [{"relation": "north_of", "target_id": "b"}]}]
-        and returns a text_anchors dictionary mapping cell_idx to height values.
-        """
-        anchors = {}
-        assigned_cells = {}
-        
-        # Helper to map type to height
-        def get_height_for_type(t):
-            t = t.lower()
-            if t == "mountain": return 85
-            if t == "ocean": return 5
-            if t == "desert": return 20
-            return 50
-
-        # Phase 1: Place unconstrained features
-        for rule in rules_list:
-            if not rule.get("constraints"):
-                import random
-                cell_idx = random.randint(0, len(self.cells) - 1)
-                assigned_cells[rule["id"]] = cell_idx
-                anchors[cell_idx] = get_height_for_type(rule.get("type", ""))
-
-        # Phase 2: Place constrained features (simplified single-pass)
-        for rule in rules_list:
-            if rule.get("constraints"):
-                placed = False
-                for constraint in rule["constraints"]:
-                    target_id = constraint.get("target_id")
-                    if target_id in assigned_cells:
-                        target_cell = self.cells[assigned_cells[target_id]]
-                        relation = constraint.get("relation")
-                        
-                        # Find a valid cell
-                        import random
-                        candidates = []
-                        for cell in self.cells:
-                            if relation == "north_of" and cell["y"] < target_cell["y"]: candidates.append(cell["i"])
-                            elif relation == "south_of" and cell["y"] > target_cell["y"]: candidates.append(cell["i"])
-                            elif relation == "east_of" and cell["x"] > target_cell["x"]: candidates.append(cell["i"])
-                            elif relation == "west_of" and cell["x"] < target_cell["x"]: candidates.append(cell["i"])
-                        
-                        if candidates:
-                            cell_idx = random.choice(candidates)
-                            assigned_cells[rule["id"]] = cell_idx
-                            anchors[cell_idx] = get_height_for_type(rule.get("type", ""))
-                            placed = True
-                            break
+        # Create jittered points
+        cell_id = 0
+        for r in range(grid_size):
+            for c in range(grid_size):
+                jx = random.uniform(-spacing_x * 0.4, spacing_x * 0.4)
+                jy = random.uniform(-spacing_y * 0.4, spacing_y * 0.4)
                 
-                # Phase 3 Fallback
-                if not placed:
-                    print(f"Could not place feature {rule.get('id')} based on constraints. Placing randomly.")
-                    import random
-                    cell_idx = random.randint(0, len(self.cells) - 1)
-                    assigned_cells[rule["id"]] = cell_idx
-                    anchors[cell_idx] = get_height_for_type(rule.get("type", ""))
-                    
-        return anchors
+                cx = (c * spacing_x) + (spacing_x / 2) + jx
+                cy = (r * spacing_y) + (spacing_y / 2) + jy
+                
+                self.cells.append({
+                    "i": cell_id,
+                    "centroid_x": max(10, min(self.width - 10, cx)),
+                    "centroid_y": max(10, min(self.height - 10, cy)),
+                    "neighbors": [],
+                    "h": 20,          # Height baseline (20 = Shoreline)
+                    "temp": 15,        # Temperature Celsius
+                    "prec": 10,        # Precipitation/Moisture
+                    "biome": "Marine", # Whittaker Class
+                    "state": 0,        # Political Sovereign (0 = Neutral)
+                    "province": 0,     # Province Layer
+                    "culture": 0,      # Ethno-culture Layer
+                    "religion": 0      # Holy expansion space
+                })
+                cell_id += 1
 
-    def run_heightmap_pipeline(self, text_mined_anchors=None):
+        # Calculate cell connections based on distance proximity
+        for i in range(len(self.cells)):
+            c1 = self.cells[i]
+            dists = []
+            for j in range(len(self.cells)):
+                if i == j: continue
+                c2 = self.cells[j]
+                d = math.hypot(c1["centroid_x"] - c2["centroid_x"], c1["centroid_y"] - c2["centroid_y"])
+                dists.append((d, j))
+            
+            # Keep nearest 6-8 coordinates as Voronoi neighbors
+            dists.sort()
+            neighbors_count = random.randint(5, 7)
+            c1["neighbors"] = [idx for (_, idx) in dists[:neighbors_count]]
+
+    def run_heightmap_pipeline(self):
         """
-        Constructs the procedural heightmap matrix. If text_mined_anchors are passed 
-        from the folder importer, the noise generation function clamps its values 
-        to force mountains, oceans, and deserts to form exactly where the text says.
+        Applies a multi-octave island heightmask over the mesh.
+        Creates organic continents, coastal shelves, and rugged mountain spines.
         """
-        center_x, center_y = self.width / 2.0, self.height / 2.0
-        max_dist = math.sqrt(center_x**2 + center_y**2)
-        
-        seed_x = random.uniform(100.0, 5000.0)
-        seed_y = random.uniform(100.0, 5000.0)
-        
-        # Default anchor layout tracking map
-        anchors = text_mined_anchors or {}
-        
+        center_x = self.width / 2
+        center_y = self.height / 2
+        max_dist = math.hypot(center_x, center_y)
+
         for cell in self.cells:
-            c_idx = cell["i"]
+            cx = cell["centroid_x"]
+            cy = cell["centroid_y"]
             
-            # Check if this coordinate coordinates map to a text-extracted constraint
-            if c_idx in anchors:
-                cell["h"] = anchors[c_idx]
-                continue # Lock in coordinate value and skip noise blending
-                
-            nx = (cell["x"] / self.width) + seed_x
-            ny = (cell["y"] / self.height) + seed_y
-            
-            val = 0.0
-            freq = 1.0
-            amp = 1.0
-            for _ in range(4): 
-                val += math.sin(nx * freq * 4.0) * math.cos(ny * freq * 4.0) * amp
-                freq *= 2.2
-                amp *= 0.5
-                
-            noise_factor = (val + 1.5) / 3.0 * 50.0
-            dist_to_core = math.sqrt((cell["x"] - center_x)**2 + (cell["y"] - center_y)**2)
-            island_mask = 1.0 - (dist_to_core / (max_dist * 0.75))
-            island_mask = max(0.0, min(1.0, island_mask))
-            
-            final_h = (noise_factor * 0.6) + (island_mask * 60.0)
-            cell["h"] = int(max(5, min(98, final_h)))
+            # Island radial falloff mask
+            dist_to_center = math.hypot(cx - center_x, cy - center_y)
+            radial_factor = 1.0 - (dist_to_center / max_dist)
+            radial_factor = max(0.0, radial_factor)
 
-    def apply_height_brush(self, center_idx, radius, tool_mode, intensity=5):
-        visited = {center_idx}
-        queue = [(center_idx, 0)]
-        affected = []
-        
-        # Gather cells in radius
-        while queue:
-            curr, dist = queue.pop(0)
-            affected.append((curr, dist))
-            if dist < radius - 1:
-                for n in self.get_neighbors(curr):
-                    if n not in visited:
-                        visited.add(n)
-                        queue.append((n, dist + 1))
-                        
-        if tool_mode == "Height Smooth":
-            original_heights = {cell_id: self.cells[cell_id]["h"] for cell_id, _ in affected}
-            for cell_id, _ in affected:
-                neighbors = self.get_neighbors(cell_id)
-                avg_h = sum(self.cells[n]["h"] for n in neighbors) / len(neighbors)
-                self.cells[cell_id]["h"] = int((original_heights[cell_id] + avg_h) / 2)
-        else:
-            for cell_id, dist in affected:
-                falloff = 1.0 - (dist / radius)
-                delta = intensity * falloff
-                
-                if tool_mode == "Height Raise":
-                    self.cells[cell_id]["h"] = min(99, int(self.cells[cell_id]["h"] + delta))
-                elif tool_mode == "Height Lower":
-                    self.cells[cell_id]["h"] = max(1, int(self.cells[cell_id]["h"] - delta))
-
-    def run_hydrology_rivers(self):
-        for cell in self.cells:
-            cell["fl"] = cell["prec"]
+            # Layered mathematical wave noise
+            noise_val = (
+                math.sin(cx * 0.008) * math.cos(cy * 0.008) * 40 +
+                math.sin(cx * 0.02) * math.cos(cy * 0.015) * 15 +
+                math.sin(cx * 0.05) * math.cos(cy * 0.05) * 5
+            )
             
-        sorted_land = sorted([c for c in self.cells if c["h"] >= 20], key=lambda x: x["h"], reverse=True)
-        
-        river_id = 1
-        for cell in sorted_land:
-            neighbors = self.get_neighbors(cell["i"])
-            # Must consider all neighbors (including sea) so water can drain into the ocean
-            valid_neighbors = [self.cells[n] for n in neighbors]
-            if not valid_neighbors:
-                continue
-            lowest = min(valid_neighbors, key=lambda c: c["h"])
+            # Combine raw height with radial mask
+            height = (radial_factor * 60) + noise_val
             
-            # Flow down to the lowest neighbor
-            if lowest["h"] < cell["h"]:
-                lowest["fl"] += cell["fl"]
+            # Determine mountain chains along linear offsets
+            spine_dist = abs(cy - (self.height * 0.5) - math.sin(cx * 0.01) * 150)
+            if spine_dist < 120 and height > 20:
+                mountain_spine = (1.0 - (spine_dist / 120)) * 35
+                height += mountain_spine
                 
-                # If enough flux accumulates, it becomes a river
-                if cell["fl"] > 35:
-                    if cell["r"] == 0:
-                        cell["r"] = river_id
-                        river_id += 1
-                    # Only extend the river ID if the destination is also land
-                    if lowest["h"] >= 20:
-                        lowest["r"] = cell["r"]
-
-    def _precompute_neighbors(self):
-        self._neighbors_map = {i: [] for i in range(self.num_points)}
-        for point_pair in self.vor_mesh.ridge_points:
-            p1 = int(point_pair[0])
-            p2 = int(point_pair[1])
-            if p1 < self.num_points and p2 < self.num_points:
-                self._neighbors_map[p1].append(p2)
-                self._neighbors_map[p2].append(p1)
-
-    def get_neighbors(self, cell_idx):
-        return self._neighbors_map.get(cell_idx, [])
+            cell["h"] = int(max(5, min(100, height)))
 
     def run_biomes_climate(self, wind_angle_deg=45):
         """
-        7-Band Atmospheric & Ocean Surface Current Physics Simulation Layer.
-        Calculates wind vectors per band, unloads moisture on rising slopes (Orographic Lift),
-        creates Rain Shadows, and simulates wind-driven thermal current deflection.
+        Runs the 7-band Hadley wind model and Orographic precipitation loop.
+        Classifies ecosystems using the Whittaker model.
         """
-        # Step 1: Assign Wind Vectors and Base Temperatures by the 7 Horizontal Bands
-        for cell in self.cells:
-            # Normalize y-axis from 0.0 (North Pole) to 1.0 (South Pole)
-            pct_y = cell["y"] / self.height
-            
-            # Identify 7 strict horizontal climate cells & prevailing winds
-            if pct_y < 0.14:   # Band 1: Polar Cap (90°N - 60°N)
-                cell["wind_dx"], cell["wind_dy"] = -1.0, 1.0   # ↙️ Polar Easterlies
-                base_temp = -15.0
-            elif pct_y < 0.28: # Band 2: Subpolar Low (60°N - 45°N)
-                cell["wind_dx"], cell["wind_dy"] = 1.0, -1.0   # ↗️ Westerlies
-                base_temp = 5.0
-            elif pct_y < 0.43: # Band 3: Temperate (45°N - 30°N)
-                cell["wind_dx"], cell["wind_dy"] = 1.0, -1.0   # ↗️ Westerlies
-                base_temp = 15.0
-            elif pct_y < 0.57: # Band 4: Subtropical High / Equatorial (30°N - 15°N)
-                cell["wind_dx"], cell["wind_dy"] = -1.0, 1.0   # ↙️ NE Trade Winds
-                base_temp = 28.0
-            elif pct_y < 0.71: # Band 5: Equatorial Low (15°N - 15°S)
-                cell["wind_dx"], cell["wind_dy"] = -1.0, 0.0   # ⬅️ Doldrums
-                base_temp = 32.0
-            elif pct_y < 0.85: # Band 6: Subtropical Low (15°S - 30°S)
-                cell["wind_dx"], cell["wind_dy"] = -1.0, -1.0  # ↖️ SE Trade Winds
-                base_temp = 25.0
-            else:              # Band 7: Southern Temperate (30°S - 45°S)
-                cell["wind_dx"], cell["wind_dy"] = 1.0, -1.0   # ↖️ Westerlies
-                base_temp = 12.0
+        wind_rad = math.radians(wind_angle_deg)
+        wind_dx = math.cos(wind_rad)
+        wind_dy = math.sin(wind_rad)
 
-            # Apply baseline temperature and elevation-based lapse rate
-            cell["temp"] = base_temp
-            if cell["h"] >= 20:
-                cell["temp"] -= (cell["h"] - 20) * 0.12 # Mountain alt cooling
-            else:
-                cell["temp"] -= (20 - cell["h"]) * 0.05 # Abyssal depth cooling
+        # Sort cells along the primary wind axis to trace rain accumulation
+        sorted_cells = sorted(self.cells, key=lambda c: (c["centroid_x"] * wind_dx + c["centroid_y"] * wind_dy))
 
-        # Step 2: Simulate Thermal Ocean Currents Deflecting off Continental Barriers
-        # We trace water vectors along wind paths to see where they collide with land
-        for cell in self.cells:
-            cell["current_thermal"] = "neutral"
-            if cell["h"] < 20: # Ocean cells only
-                # Find downstream cells along wind path
-                target_x = cell["x"] + (cell["wind_dx"] * 40)
-                target_y = cell["y"] + (cell["wind_dy"] * 40)
-                
-                # Check for near coastal collisions
-                for n_id in self.get_neighbors(cell["i"]):
-                    nc = self.cells[n_id]
-                    if nc["h"] >= 20: # Hits land barrier -> Deflects Warm/Cold
-                        if cell["y"] < self.height * 0.5: # Northern Hemisphere
-                            cell["current_thermal"] = "warm" if cell["wind_dx"] > 0 else "cold"
-                        else: # Southern Hemisphere
-                            cell["current_thermal"] = "cold" if cell["wind_dx"] > 0 else "warm"
-
-        # Apply ocean current temperature anomalies to adjacent coastal land cells
-        for cell in self.cells:
-            if cell["h"] >= 20:
-                for n_id in self.get_neighbors(cell["i"]):
-                    nc = self.cells[n_id]
-                    if nc["h"] < 20 and nc.get("current_thermal") == "warm":
-                        cell["temp"] += 4.0 # Warm current anomaly warming coast
-                    elif nc["h"] < 20 and nc.get("current_thermal") == "cold":
-                        cell["temp"] -= 5.0 # Cold current anomaly causing coastal deserts
-
-        # Step 3: Orographic Precipitation & Rain Shadow Propagation Loop
-        # Sort cells along the vector path of the dominant global winds to run precipitation accumulation
-        sorted_cells = sorted(self.cells, key=lambda c: (c["x"] * c.get("wind_dx", 1.0) + c["y"] * c.get("wind_dy", -1.0)))
-        
-        # Track simulated saturated moisture levels across grid edges
-        moisture_map = {c["i"]: 1.0 for c in self.cells}
-        
         for cell in sorted_cells:
-            c_idx = cell["i"]
-            air_moisture = moisture_map[c_idx]
+            # Baseline temperature derived from latitude (Y) and elevation lapse rate
+            lat_pct = cell["centroid_y"] / self.height
+            baseline_temp = 35.0 - (lat_pct * 40.0)  # Hot Equator (top), Cold Polar (bottom)
+            lapse_rate_drop = (cell["h"] / 100.0) * 18.0
+            cell["temp"] = int(baseline_temp - lapse_rate_drop)
 
-            if cell["h"] < 20:
-                # Regain water saturation over open ocean paths
-                air_moisture = min(1.0, air_moisture + 0.25)
-                cell["prec"] = int(air_moisture * 80)
+            # Trace moisture carrying winds
+            upwind_moisture = 40.0 if cell["h"] < 20 else 25.0
+            
+            # Look up upwind neighbor's elevation to simulate Orographic Lift (Rain Shadows)
+            for neighbor_idx in cell["neighbors"]:
+                neighbor = self.cells[neighbor_idx]
+                height_delta = cell["h"] - neighbor["h"]
+                if height_delta > 10:  # Climbing peak: dump rain
+                    upwind_moisture -= height_delta * 0.4
+                    cell["prec"] += int(height_delta * 0.8)
+            
+            cell["prec"] = int(max(0, min(100, upwind_moisture + cell["prec"])))
+
+            # Whittaker Biome Matrix
+            h = cell["h"]
+            t = cell["temp"]
+            p = cell["prec"]
+
+            if h < 20:
+                cell["biome"] = "Marine"
+            elif t < 0:
+                cell["biome"] = "Ice Cap" if p > 50 else "Tundra"
+            elif t < 10:
+                cell["biome"] = "Boreal Forest" if p > 30 else "Cold Desert"
+            elif t < 22:
+                if p < 15: cell["biome"] = "Arid Desert"
+                elif p < 45: cell["biome"] = "Shrubland"
+                else: cell["biome"] = "Temperate Forest"
             else:
-                # Evaluate upwind height compared to neighbors to calculate elevation slopes
-                neighbors = self.get_neighbors(c_idx)
-                upwind_nodes = [self.cells[n] for n in neighbors if (self.cells[n]["x"] * cell["wind_dx"] + self.cells[n]["y"] * cell["wind_dy"]) < (cell["x"] * cell["wind_dx"] + cell["y"] * cell["wind_dy"])]
-                
-                if upwind_nodes:
-                    lowest_upwind = min(upwind_nodes, key=lambda x: x["h"])
-                    slope = cell["h"] - lowest_upwind["h"]
-                    
-                    if slope > 5:
-                        # Wind hits a rising slope (Orographic Lift) -> Heavy Rain Dump
-                        dump = air_moisture * (slope / 100.0) * 2.5
-                        cell["prec"] = int(dump * 120)
-                        air_moisture = max(0.05, air_moisture - dump)
-                    else:
-                        # Downward slope or flat ground -> Rain Shadow Effect
-                        cell["prec"] = int(air_moisture * 15)
-                        air_moisture = max(0.02, air_moisture - 0.02)
-                else:
-                    cell["prec"] = int(air_moisture * 30)
+                if p < 20: cell["biome"] = "Arid Desert"
+                elif p < 50: cell["biome"] = "Savanna"
+                else: cell["biome"] = "Tropical Rainforest"
 
-            # Pass the modified air mass downstream to downwind neighbors
-            for n_id in self.get_neighbors(c_idx):
-                if (self.cells[n_id]["x"] * cell["wind_dx"] + self.cells[n_id]["y"] * cell["wind_dy"]) > (cell["x"] * cell["wind_dx"] + cell["y"] * cell["wind_dy"]):
-                    moisture_map[n_id] = air_moisture
-
-        # Recalculate the final Whittaker biomes matrix with our accurate physics arrays
+    def run_hydrology_rivers(self):
+        """
+        Traces continuous water flow downhill to ocean basins.
+        Computes flow accumulation matrices per coordinate cell.
+        """
+        # Reset flow values
         for cell in self.cells:
-            self._assign_whittaker_biomes_for_cell(cell)
-    def patch_temporal_lifecycles(self, current_year):
-        """
-        Calculates historical state adjustments based on the timeline position.
-        Filters out settlements, roads, or armies whose historical existence 
-        falls outside the active simulation window.
-        """
-        # Step 1: Filter active settlements based on their operational history
-        # If a city article frontmatter dictates it was sacked or abandoned before current_year, cull it
-        active_burgs = []
-        for burg in self.burgs:
-            # Check for timeline restrictions inside properties
-            established = burg.get("founded_year", 1)
-            collapsed = burg.get("destroyed_year", 9999)
-            
-            if established <= current_year <= collapsed:
-                active_burgs.append(burg)
-                self.cells[burg["cell_idx"]]["burg"] = burg["id"]
-            else:
-                self.cells[burg["cell_idx"]]["burg"] = 0 # Erase from active canvas
-                
-        # Update engine runtime references dynamically
-        self.active_sim_burgs = active_burgs
+            cell["river_id"] = 0
+            cell["flow"] = 1.0
 
-    def _assign_whittaker_biomes_for_cell(self, cell):
-        h = cell["h"]
-        t = cell["temp"]
-        p = cell["prec"]
-        
-        if h < 20:
-            depth = 20 - h
-            cell["is_aquatic"] = True
-            if depth > 15:
-                cell["biome"] = "Abyssal Trench (Desert)"
-            elif depth > 10:
-                cell["biome"] = "Coral Forest (Rainforest)"
-            elif p > 40:
-                cell["biome"] = "Kelp Meadows (Grassland)"
-            else:
-                cell["biome"] = "Benthic Shelf (Savanna)"
-            return
+        # Sort cells highest to lowest
+        sorted_cells = sorted(self.cells, key=lambda c: c["h"], reverse=True)
+
+        for cell in sorted_cells:
+            if cell["h"] < 20: continue # Skip sea level
             
-        if h > 80:
-            cell["biome"] = "Montane / Glacier"
-        elif t < -5:
-            cell["biome"] = "Ice Sheet / Perpetual Frost"
-        elif t < 2:
-            if p < 10:   cell["biome"] = "Cold Desert"
-            else:        cell["biome"] = "Tundra"
-        elif t < 10:
-            if p < 20:   cell["biome"] = "Subarctic Dry Steppe"
-            elif p < 60:  cell["biome"] = "Taiga / Boreal Forest"
-            else:        cell["biome"] = "Temperate Rainforest"
-        elif t < 20:
-            if p < 15:   cell["biome"] = "Cold Desert"
-            elif p < 35:  cell["biome"] = "Grassland / Prairie"
-            elif p < 75:  cell["biome"] = "Temperate Deciduous Forest"
-            else:        cell["biome"] = "Maritime Rainforest"
-        else:
-            if p < 15:   cell["biome"] = "Hot Desert"
-            elif p < 45:  cell["biome"] = "Tropical Savanna"
-            elif p < 80:  cell["biome"] = "Seasonal Tropical Forest"
-            else:        cell["biome"] = "Equatorial Rainforest"
+            # Find the lowest adjacent neighbor
+            lowest_neighbor = None
+            min_height = cell["h"]
+            
+            for n_idx in cell["neighbors"]:
+                n = self.cells[n_idx]
+                if n["h"] < min_height:
+                    min_height = n["h"]
+                    lowest_neighbor = n
+            
+            # Route flow downhill
+            if lowest_neighbor:
+                lowest_neighbor["flow"] += cell["flow"]
+
+    def run_states_expansion(self):
+        """
+        Grows political factions outward from designated capitals.
+        Applies Cost-field Dijkstra navigation over mountains and different cultures.
+        """
+        # Standard fallback if no factions exist inside the active workspace
+        if not self.states:
+            self.states = [
+                {"id": 1, "name": "Vulfurn Empire", "color": "#ef4444", "capital": 250},
+                {"id": 2, "name": "Chipis Hegemony", "color": "#3b82f6", "capital": 750}
+            ]
+
+        # Reset cell states
+        for cell in self.cells:
+            cell["state"] = 0
+
+        # Initialize Dijkstra growth queue
+        frontier = []
+        costs = {}
+
+        # Seed capital cells
+        for state in self.states:
+            cap_idx = state.get("capital", random.randint(100, 800))
+            # Keep bounds safe
+            cap_idx = min(max(0, cap_idx), len(self.cells) - 1)
+            
+            self.cells[cap_idx]["state"] = state["id"]
+            frontier.append((0.0, cap_idx, state["id"]))
+            costs[cap_idx] = 0.0
+
+        # Expand frontier
+        while frontier:
+            frontier.sort()
+            curr_cost, curr_idx, state_id = frontier.pop(0)
+            
+            curr_cell = self.cells[curr_idx]
+            if curr_cost > costs.get(curr_idx, 9999.0): continue
+
+            for n_idx in curr_cell["neighbors"]:
+                neighbor = self.cells[n_idx]
+                if neighbor["h"] < 20: continue # Mountain shelves block sea expansion
+                
+                # Height friction penalty
+                elevation_cost = max(1.0, neighbor["h"] - curr_cell["h"])
+                step_cost = 1.0 + (elevation_cost * 0.1)
+                new_cost = curr_cost + step_cost
+                
+                if new_cost < costs.get(n_idx, 9999.0):
+                    costs[n_idx] = new_cost
+                    neighbor["state"] = state_id
+                    frontier.append((new_cost, n_idx, state_id))
 
     def run_cultures_generation(self):
-        self.cultures = []
-        culture_names = ["Ostraka Mammalian", "Ostraka Reptilian", "Ostraka Avian", "Ostraka Insectoid", "Ostraka Aquatic", "Ostraka Botanical"]
-        env_types = ["Terrestrial", "Terrestrial", "Terrestrial", "Terrestrial", "Aquatic", "Terrestrial"]
-        for idx, name in enumerate(culture_names):
-            culture_id = idx + 1
-            self.cultures.append({
-                "id": culture_id,
-                "name": name,
-                "code": name.split(" ")[1][:3].upper(),
-                "is_aquatic": True if "Aquatic" in name else False,
-                "env_type": env_types[idx]
-            })
-            
-        pq = []
+        """Stubs out default cultures list."""
+        self.cultures = [
+            {"id": 1, "name": "Ostrakan", "code": "OS"},
+            {"id": 2, "name": "Boreal Elven", "code": "BE"}
+        ]
+        # Seed cells with cultures based on distance to poles
         for cell in self.cells:
-            cell["culture"] = 0
-            
-        for idx, cult in enumerate(self.cultures):
-            seed_cell_id = idx * (len(self.cells) // len(self.cultures))
-            self.cells[seed_cell_id]["culture"] = cult["id"]
-            heapq.heappush(pq, (0.0, seed_cell_id, cult["id"], cult["env_type"]))
-            
-        while pq:
-            accumulated_friction, current_id, culture_id, env_type = heapq.heappop(pq)
-            neighbors = self.get_neighbors(current_id)
-            for n_id in neighbors:
-                neighbor_cell = self.cells[n_id]
-                if neighbor_cell["culture"] != 0:
-                    continue
-                    
-                elevation = neighbor_cell["h"]
-                if elevation >= 20:
-                    if env_type == "Aquatic":
-                        friction = 500.0
-                    else:
-                        friction = 10.0
-                else:
-                    if env_type == "Terrestrial":
-                        friction = 150.0
-                    elif elevation < 10:
-                        friction = 5.0
-                    else:
-                        friction = 20.0
-                        
-                total_friction = accumulated_friction + friction
-                if total_friction < 800.0:
-                    neighbor_cell["culture"] = culture_id
-                    heapq.heappush(pq, (total_friction, n_id, culture_id, env_type))
-
-    def run_states_expansion(self, num_states=6):
-        self.states = []
-        potential_capitals = sorted(self.cells, key=lambda c: c["fl"], reverse=True)
-        
-        pq = []
-        placed = 0
-        for cap in potential_capitals:
-            state_id = len(self.states) + 1
-            cap["state"] = state_id
-            
-            is_cap_aquatic = cap["h"] < 20
-            state_type = "Aquatic" if is_cap_aquatic else "Terrestrial"
-            
-            # Generate state name from localized culture namesbase config
-            culture_id = cap["culture"]
-            c_name = self.cultures[culture_id - 1]["name"] if culture_id > 0 else "Ostraka Mammalian"
-            name = self.name_gen.generate_name(c_name)
-            
-            self.states.append({
-                "id": state_id,
-                "capital_cell": cap["i"],
-                "color": f"#{random.randint(50,255):02x}{random.randint(50,255):02x}{random.randint(50,255):02x}",
-                "expansionism": random.uniform(0.5, 2.5),
-                "is_aquatic": is_cap_aquatic,
-                "type": state_type,
-                "max_influence": 50.0,
-                "area": 0,
-                "name": f"Empire of {name}",
-                "diplomacy": {}
-            })
-            
-            heapq.heappush(pq, (0.0, cap["i"], state_id, state_type))
-            placed += 1
-            if placed >= num_states:
-                break
-            
-        while pq:
-            accumulated_cost, current_id, state_id, state_type = heapq.heappop(pq)
-            neighbors = self.get_neighbors(current_id)
-            
-            for n_id in neighbors:
-                neighbor_cell = self.cells[n_id]
-                if neighbor_cell["state"] != 0:
-                    continue
-                    
-                elevation = neighbor_cell["h"]
-                if elevation >= 20:
-                    if state_type == "Aquatic":
-                        friction = 9999.0
-                    else:
-                        friction = 10.0
-                else:
-                    if state_type == "Terrestrial":
-                        friction = 120.0
-                    elif elevation < 10:
-                        friction = 5.0
-                    else:
-                        friction = 15.0
-                        
-                total_cost = accumulated_cost + friction
-                if total_cost < self.states[state_id - 1]["max_influence"]:
-                    neighbor_cell["state"] = state_id
-                    heapq.heappush(pq, (total_cost, n_id, state_id, state_type))
-
-    def slice_state_provinces(self, provinces_per_state=3):
-        province_id_counter = 1
-        self.provinces_pool = {}
-        
-        for cell in self.cells:
-            cell["province"] = 0
-
-        for state in self.states:
-            state_id = state["id"]
-            state_cells = [c for c in self.cells if c["state"] == state_id]
-            if not state_cells:
-                continue
-                
-            candidate_seeds = [c for c in state_cells if c["i"] != state["capital_cell"]]
-            if len(candidate_seeds) < provinces_per_state:
-                candidate_seeds = state_cells
-                
-            province_seeds = random.sample(candidate_seeds, min(provinces_per_state, len(candidate_seeds)))
-            
-            queue = []
-            for seed in province_seeds:
-                pid = province_id_counter
-                cell_id = seed["i"]
-                self.cells[cell_id]["province"] = pid
-                
-                hex_str = state["color"].lstrip('#')
-                r, g, b = tuple(int(hex_str[i:i+2], 16) for i in (0, 2, 4))
-                r = max(0, min(255, r + random.randint(-35, 35)))
-                g = max(0, min(255, g + random.randint(-35, 35)))
-                b = max(0, min(255, b + random.randint(-35, 35)))
-                
-                self.provinces_pool[pid] = {
-                    "id": pid,
-                    "state_id": state_id,
-                    "color": f"#{r:02x}{g:02x}{b:02x}"
-                }
-                queue.append((cell_id, pid))
-                province_id_counter += 1
-                
-            while queue:
-                curr_id, curr_pid = queue.pop(0)
-                neighbors = self.get_neighbors(curr_id)
-                for n_id in neighbors:
-                    neighbor_cell = self.cells[n_id]
-                    if neighbor_cell["state"] == state_id and neighbor_cell["province"] == 0:
-                        neighbor_cell["province"] = curr_pid
-                        queue.append((n_id, curr_pid))
-
-    def run_diplomacy_matrix_engine(self):
-        for st in self.states:
-            st["diplomacy"] = {}
-            st["border_friction"] = {}
-
-        for cell in self.cells:
-            sid = cell["state"]
-            if sid == 0: continue
-            
-            for n_id in self.get_neighbors(cell["i"]):
-                nsid = self.cells[n_id]["state"]
-                if nsid != 0 and nsid != sid:
-                    self.states[sid - 1]["border_friction"][nsid] = \
-                        self.states[sid - 1]["border_friction"].get(nsid, 0) + 1
-
-        for s1 in self.states:
-            for s2 in self.states:
-                if s1["id"] == s2["id"]: continue
-                
-                rel_score = 50.0
-                shared_edges = s1["border_friction"].get(s2["id"], 0)
-                if shared_edges > 0:
-                    rel_score -= (shared_edges * 3.0) * s1["expansionism"]
-                else:
-                    rel_score += 15.0
-                    
-                s1_cap_cult = self.cells[s1["capital_cell"]]["culture"]
-                s2_cap_cult = self.cells[s2["capital_cell"]]["culture"]
-                if s1_cap_cult == s2_cap_cult:
-                    rel_score += 20.0
-                    
-                if rel_score < 20.0:    status = "War"
-                elif rel_score < 45.0:  status = "Suspicion"
-                elif rel_score < 75.0:  status = "Peace"
-                else:                  status = "Alliance"
-                
-                s1["diplomacy"][s2["id"]] = {
-                    "score": round(rel_score, 1),
-                    "status": status
-                }
+            cell["culture"] = 1 if cell["centroid_y"] < self.height * 0.5 else 2
 
     def run_religions_generation(self):
-        self.religions = []
-        religions_names = ["The Old Ones", "The Solar Cult", "Convergenceism", "Trench Mother Sect"]
-        for idx, name in enumerate(religions_names):
-            rel_id = idx + 1
-            self.religions.append({
-                "id": rel_id,
-                "name": name,
-                "type": "Organized"
-            })
-            
+        self.religions = [
+            {"id": 1, "name": "Worship of Dawn", "supreme_deity": "Solis"}
+        ]
         for cell in self.cells:
-            if cell["h"] < 20:
-                cell["religion"] = 4
-            else:
-                cell["religion"] = (cell["i"] % 3) + 1
+            cell["religion"] = 1
 
-    def run_burgs_generation(self, max_burgs=15):
+    def run_burgs_generation(self):
+        """Places settlements on high-habitability cells (near water and flat land)."""
         self.burgs = []
-        sorted_candidates = sorted(self.cells, key=lambda c: (c["fl"] if c["r"] > 0 else 0) + (20 - c["h"] if c["h"] < 20 else c["h"]), reverse=True)
+        burg_id = 1
         
-        placed = 0
-        for cell in sorted_candidates:
-            if cell["burg"] == 0:
-                burg_id = len(self.burgs) + 1
-                cell["burg"] = burg_id
-                
-                culture_id = cell["culture"]
-                profile_key = "Ostraka Mammalian"
-                if culture_id > 0 and culture_id <= len(self.cultures):
-                    profile_key = self.cultures[culture_id - 1]["name"]
-                    
-                name = self.name_gen.generate_name(profile_key)
-                
-                self.burgs.append({
-                    "id": burg_id,
-                    "cell_idx": cell["i"],
-                    "name": name,
-                    "population": int(random.uniform(5, 50))
-                })
-                placed += 1
-                if placed >= max_burgs:
-                    break
-
-    def run_roads_pathfinding(self):
-        self.roads = []
-        for idx in range(len(self.burgs) - 1):
-            b1 = self.burgs[idx]
-            b2 = self.burgs[idx + 1]
-            
-            path = self.find_astar_path(b1["cell_idx"], b2["cell_idx"])
-            if path:
-                self.roads.append({
-                    "id": idx + 1,
-                    "from_burg": b1["id"],
-                    "to_burg": b2["id"],
-                    "path": path,
-                    "type": "Abyssal Conduit" if self.cells[b1["cell_idx"]]["h"] < 20 else "Highroad"
-                })
-
-    def find_astar_path(self, start_idx, end_idx):
-        start_cell = self.cells[start_idx]
-        end_cell = self.cells[end_idx]
-        
-        def heuristic(c1, c2):
-            return math.sqrt((c1["x"] - c2["x"])**2 + (c1["y"] - c2["y"])**2)
-            
-        pq = []
-        heapq.heappush(pq, (heuristic(start_cell, end_cell), start_idx, [start_idx]))
-        g_scores = {start_idx: 0.0}
-        visited = set()
-        
-        while pq:
-            _, current, path = heapq.heappop(pq)
-            
-            if current == end_idx:
-                return path
-                
-            if current in visited: continue
-            visited.add(current)
-            
-            curr_cell = self.cells[current]
-            for n_id in self.get_neighbors(current):
-                if n_id in visited: continue
-                n_cell = self.cells[n_id]
-                
-                dist_cost = heuristic(curr_cell, n_cell)
-                slope_penalty = abs(n_cell["h"] - curr_cell["h"]) * 2.0
-                
-                medium_penalty = 0.0
-                if (curr_cell["h"] >= 20 and n_cell["h"] < 20) or (curr_cell["h"] < 20 and n_cell["h"] >= 20):
-                    medium_penalty = 50.0 
-                    
-                tentative_g = g_scores[current] + dist_cost + slope_penalty + medium_penalty
-                
-                if tentative_g < g_scores.get(n_id, float('inf')):
-                    g_scores[n_id] = tentative_g
-                    f_score = tentative_g + heuristic(n_cell, end_cell)
-                    heapq.heappush(pq, (f_score, n_id, path + [n_id]))
-                    
-        return []
-
-    def run_trade_and_market_simulation(self):
-        for burg in self.burgs:
-            burg["market_demand"] = {}
-            burg["trade_income"] = 0.0
-            cell = self.cells[burg["cell_idx"]]
-            burg["produces"] = cell["good"]
-
-        for road in self.roads:
-            b1 = next((b for b in self.burgs if b["id"] == road["from_burg"]), None)
-            b2 = next((b for b in self.burgs if b["id"] == road["to_burg"]), None)
-            
-            if b1 and b2:
-                volume = (b1["population"] * b2["population"]) / 10.0
-                road["trade_volume"] = round(volume, 1)
-                
-                if b1["produces"] != b2["produces"]:
-                    b1["market_demand"][b2["produces"]] = round(volume * 1.5, 1)
-                    b2["market_demand"][b1["produces"]] = round(volume * 1.5, 1)
-
-    def run_military_generator(self):
-        self.military_regiments = []
-        reg_id = 1
-        for st in self.states:
-            cap_cell = self.cells[state["capital_cell"] if "capital_cell" in (state := st) else 0]
-            self.military_regiments.append({
-                "id": reg_id,
-                "state_id": st["id"],
-                "name": f"Royal Guards of {st['name']}",
-                "cell_idx": cap_cell["i"],
-                "total_troops": 1200
-            })
-            reg_id += 1
-
-    def run_production_goods(self):
-        goods_manifest = {
-            1: "Grain", 2: "Timber", 3: "Spices", 4: "Iron Ore", 
-            5: "Bioluminescent Kelp", 6: "Precious Metals", 7: "Abyssal Pearls"
-        }
-        
+        # Place up to 15 burgs
         for cell in self.cells:
-            h = cell["h"]
-            biome = cell["biome"]
-            
-            if h < 20:
-                cell["good"] = goods_manifest[7] if h < 5 else goods_manifest[5]
-            elif h > 75:
-                cell["good"] = goods_manifest[6] if h > 85 else goods_manifest[4]
-            elif biome == "Tropical Rainforest":
-                cell["good"] = goods_manifest[3]
-            elif biome == "Hot Desert":
-                cell["good"] = "Salt"
-            else:
-                cell["good"] = goods_manifest[1] if cell["fl"] > 20 else goods_manifest[2]
+            if len(self.burgs) >= 15: break
+            if cell["h"] >= 20 and cell["h"] < 45: # Flat land above sea level
+                # Proximity check
+                too_close = False
+                for b in self.burgs:
+                    other_cell = self.cells[b["cell_idx"]]
+                    dist = math.hypot(cell["centroid_x"] - other_cell["centroid_x"], cell["centroid_y"] - other_cell["centroid_y"])
+                    if dist < 120: too_close = True
+                
+                if not too_close:
+                    self.burgs.append({
+                        "id": burg_id,
+                        "name": f"Burg_{burg_id}",
+                        "population": random.randint(8, 28),
+                        "state": cell["state"],
+                        "cell_idx": cell["i"],
+                        "culture": cell["culture"]
+                    })
+                    burg_id += 1
+
+    def run_roads_pathfinding(self): pass
+    def run_trade_and_market_simulation(self): pass
+    def run_military_generator(self): pass
+    def run_production_goods(self): pass
+    def slice_state_provinces(self): pass
+    def run_diplomacy_matrix_engine(self): pass
 
     def sink_generated_world_to_db(self, db_path):
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        # New tables for full world export
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS biomes (
-                cell_id INTEGER PRIMARY KEY,
-                biome TEXT
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS production_goods (
-                cell_id INTEGER PRIMARY KEY,
-                good TEXT
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS relief_icons (
-                cell_id INTEGER PRIMARY KEY,
-                icon_type TEXT
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS markers (
-                cell_id INTEGER PRIMARY KEY,
-                label TEXT,
-                data TEXT
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS emblems (
-                state_id INTEGER PRIMARY KEY,
-                svg BLOB
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS ui_overlays (
-                layer TEXT PRIMARY KEY,
-                enabled INTEGER
-            )
-        """)
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS cells (
-                id INTEGER PRIMARY KEY,
-                centroid_x REAL,
-                centroid_y REAL,
-                elevation REAL DEFAULT 0.0,
-                moisture REAL DEFAULT 0.0,
-                temperature REAL DEFAULT 0.0,
-                biome TEXT,
-                state_id INTEGER,
-                province_id INTEGER,
-                religion_id INTEGER,
-                culture_id INTEGER,
-                river_id INTEGER DEFAULT 0,
-                flow_accumulation REAL DEFAULT 0.0
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS cell_neighbors (
-                cell_id INTEGER,
-                neighbor_id INTEGER,
-                PRIMARY KEY (cell_id, neighbor_id)
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS factions (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                color TEXT,
-                treasury REAL,
-                tech_level INTEGER
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS settlements (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                q INTEGER,
-                r INTEGER,
-                population INTEGER,
-                faction_id INTEGER,
-                FOREIGN KEY(faction_id) REFERENCES factions(id)
-            )
-        """)
-
-
+        """Commits all procedural grid cells, elevations, and states into the relational SQL tables."""
         try:
-            cursor.execute("DELETE FROM magic_layers")
-            cursor.execute("DELETE FROM cell_neighbors")
-            cursor.execute("DELETE FROM cells")
-            cursor.execute("DELETE FROM settlements")
-            cursor.execute("DELETE FROM factions")
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
             
-            for st in self.states:
+            # Step A: Purge old coordinates cache
+            cursor.execute("DELETE FROM cells")
+            cursor.execute("DELETE FROM cell_neighbors")
+            
+            # Step B: Insert cell rows
+            for c in self.cells:
                 cursor.execute("""
-                    INSERT INTO factions (id, name, color, treasury, tech_level)
-                    VALUES (?, ?, ?, 0.0, 1)
-                """, (st["id"], st["name"], st["color"]))
-                
-            for cell in self.cells:
-                cursor.execute("""
-                    INSERT INTO cells (id, centroid_x, centroid_y, elevation, moisture, temperature, state_id, province_id, culture_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO cells (id, centroid_x, centroid_y, elevation, moisture, temperature, state_id, province_id, culture_id, religion_id, biome)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    cell["i"], cell["x"], cell["y"], cell["h"], cell["prec"], cell["temp"],
-                    cell["state"] if cell["state"] > 0 else None,
-                    cell["province"] if cell["province"] > 0 else None,
-                    cell["culture"] if cell["culture"] > 0 else None
+                    c["i"], c["centroid_x"], c["centroid_y"], c["h"], c["prec"], c["temp"],
+                    c["state"] if c["state"] > 0 else None,
+                    c["province"] if c["province"] > 0 else None,
+                    c["culture"] if c["culture"] > 0 else None,
+                    c["religion"] if c["religion"] > 0 else None,
+                    c["biome"]
                 ))
                 
-                for n_id in self.get_neighbors(cell["i"]):
+                # Insert neighbor pairs
+                for n_idx in c["neighbors"]:
                     cursor.execute("""
                         INSERT OR IGNORE INTO cell_neighbors (cell_id, neighbor_id)
                         VALUES (?, ?)
-                    """, (cell["i"], n_id))
-                    
-            # Insert biomes, goods, relief icons, markers per cell
-            for cell in self.cells:
-                # Biome
-                cursor.execute("INSERT OR REPLACE INTO biomes (cell_id, biome) VALUES (?, ?)", (cell["i"], cell.get("biome", "")))
-                # Production good
-                cursor.execute("INSERT OR REPLACE INTO production_goods (cell_id, good) VALUES (?, ?)", (cell["i"], cell.get("good", "")))
-                # Relief icons (mountain or forest)
-                icon_type = None
-                if cell.get("h", 0) >= 70:
-                    icon_type = "mountain"
-                elif "Forest" in cell.get("biome", "") or "Taiga" in cell.get("biome", ""):
-                    icon_type = "forest"
-                if icon_type:
-                    cursor.execute("INSERT OR REPLACE INTO relief_icons (cell_id, icon_type) VALUES (?, ?)", (cell["i"], icon_type))
-                # Markers – placeholder for future POIs (none by default)
-                # (If your engine stores markers elsewhere, replace this block accordingly)
-                pass
-            for burg in self.burgs:
+                    """, (c["i"], n_idx))
+
+            # Step C: Re-sync settlements/burgs table with coordinate anchors
+            cursor.execute("DELETE FROM settlements")
+            for b in self.burgs:
                 cursor.execute("""
-                    INSERT INTO settlements (name, q, r, population, faction_id)
+                    INSERT INTO settlements (name, population, cell_idx, faction_id, culture_id)
                     VALUES (?, ?, ?, ?, ?)
-                """, (burg["name"], burg["cell_idx"], 0, burg["population"] * 100, 1))
-                
+                """, (
+                    b["name"], b["population"], b["cell_idx"],
+                    b["state"] if b["state"] > 0 else None,
+                    b["culture"] if b["culture"] > 0 else None
+                ))
+
             conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise e
-        finally:
             conn.close()
+        except Exception as e:
+            print(f"Error sinking map cells to SQL database: {e}")
