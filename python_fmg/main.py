@@ -849,7 +849,7 @@ class TemplateWorkspaceSuite(QWidget):
         ))
         blend_lay.addWidget(self.lbl_blend_out, 1)
         blend_lay.addWidget(btn_blend)
-        lay.addLayout(blend_box)
+        lay.addWidget(blend_box)
         
         lay.addWidget(QLabel("<b>Cross-Cultural Lineage Friction &amp; Migration Paths Matrix</b>"))
         self.cult_canvas = ModularMindMapCanvas("Cultures")
