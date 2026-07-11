@@ -2196,11 +2196,28 @@ class WorldsmithMainWindow(QMainWindow):
         self.ingestor_worker = AILoreIngestor(file_list, self.db_path, self.get_lore_dir(), genre=genre)
         self.ingestor_worker.progress_update.connect(self.handle_ingestion_progress)
         self.ingestor_worker.ingestion_complete.connect(self.handle_ingestion_complete)
+        self.ingestor_worker.error_occurred.connect(self.handle_ingestion_error)
         self.ingestor_worker.start()
         self.statusBar.showMessage(f"Starting ingestion of {len(file_list)} files...")
 
     def handle_ingestion_progress(self, current, total, filename):
         self.statusBar.showMessage(f"Ingesting {current}/{total}: {filename}...")
+
+    def handle_ingestion_error(self, error_message):
+        """Captures background parsing thread failures and notifies the user."""
+        self.statusBar.showMessage("Ingestion stopped due to an error.")
+        
+        # Check if the error indicates a missing or broken model configuration
+        if "404" in error_message or "qwen" in error_message:
+            msg = (
+                f"Ingestion failed: {error_message}\n\n"
+                "This usually means the required model 'qwen2.5:latest' is not pulled into your Ollama list.\n"
+                "Please run 'ollama pull qwen2.5:latest' in your system command prompt and try again."
+            )
+        else:
+            msg = f"An unhandled background exception occurred during file upload:\n\n{error_message}"
+            
+        QMessageBox.critical(self, "Upload / Ingestion Failure", msg)
 
     def handle_ingestion_complete(self):
         self.statusBar.showMessage("AI Ingestion Complete!")
@@ -2218,8 +2235,12 @@ class WorldsmithMainWindow(QMainWindow):
         self.process_spatial_seeding_from_imported_text()
         
         # Now trigger the driver to find the first gap!
+        if self.driver_worker and self.driver_worker.isRunning():
+            self.driver_worker.terminate()
+            self.driver_worker.wait()
+            
         genre = self.cb_genre.currentText() if hasattr(self, "cb_genre") else "Fantasy"
-        self.driver_worker = AILoreDriverWorker(self.get_lore_dir(), genre=genre)
+        self.driver_worker = AILoreDriverWorker(self.get_lore_dir(), self.db_path, genre=genre)
         self.driver_worker.prompt_ready.connect(self.handle_driver_prompt)
         self.driver_worker.start()
 
