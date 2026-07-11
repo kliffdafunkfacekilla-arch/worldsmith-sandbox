@@ -249,6 +249,7 @@ class FullAzgaarSubsystemsWorkspace(QWidget):
         self.layout.setContentsMargins(2, 2, 2, 2)
 
         self.tabs = QTabWidget()
+        self.tabs.tabBar().setVisible(False)
         self.tabs.setStyleSheet("""
             QTabWidget::pane { border: 1px solid #29292E; background: #13131c; }
             QTabBar::tab { background: #16161c; color: #A0A0C0; padding: 4px 8px; border: 1px solid #29292E; font-size: 11px; }
@@ -828,6 +829,7 @@ class WorldsmithMainWindow(QMainWindow):
     def setup_staging_db(self):
         try:
             conn = sqlite3.connect(self.db_path); cursor = conn.cursor()
+            cursor.execute("CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, title TEXT, content TEXT)")
             cursor.execute("CREATE TABLE IF NOT EXISTS lore_drafts (id INTEGER PRIMARY KEY, title TEXT, content TEXT)")
             cursor.execute("CREATE TABLE IF NOT EXISTS note_history (id INTEGER PRIMARY KEY, note_id INTEGER, title TEXT, content TEXT)")
             conn.commit(); conn.close()
