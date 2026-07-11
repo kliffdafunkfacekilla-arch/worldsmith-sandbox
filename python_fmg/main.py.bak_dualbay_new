@@ -9,7 +9,8 @@ from PyQt6.QtWidgets import (
     QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox,
     QSlider, QFileDialog, QDialog, QListWidget, QInputDialog, QCheckBox,
     QFrame, QToolButton, QScrollArea, QMenu, QTableWidget, QTableWidgetItem, 
-    QTreeView, QFormLayout, QDoubleSpinBox, QHeaderView, QColorDialog, QTabWidget, QGroupBox
+    QTreeView, QFormLayout, QDoubleSpinBox, QHeaderView, QColorDialog,
+    QTabWidget, QGroupBox
 )
 from PyQt6.QtCore import Qt, QPointF, QPoint, pyqtSignal, QTimer, QDir
 from PyQt6.QtGui import (
@@ -31,156 +32,30 @@ from python_fmg.ui.map_binding import MapBindingDialog
 from python_fmg.core.emblem_generator import EmblemGenerator
 from python_fmg.core.burg_generator import BurgGenerator
 
-def initialize_complete_sandbox_db(db_path):
-    """Ensures every single required Azgaar table exists to prevent app crashes on startup."""
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+def compute_atmospheric_dimension_layer(altitude_km):
+    """
+    Applies the sequence formula to determine if a metric coordinate falls into 
+    an active Sky Layer canvas or an invisible system buffer zone.
+    Main Ground Map: 0km to 1km
+    Sky Layer 1: 1km to 2km (Buffer skipped: 2km to 3km)
+    Sky Layer 2: 3km to 4km
+    """
+    if altitude_km <= 1.0:
+        return "surface", 0.0, 1.0
         
-        # Geopolitics & Factions
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS factions (
-                id INTEGER PRIMARY KEY,
-                name TEXT UNIQUE,
-                color TEXT,
-                expansionism_rate REAL,
-                treasury REAL,
-                tech_level INTEGER
-            )
-        """)
-        
-        # Internal Provinces
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS provinces (
-                id INTEGER PRIMARY KEY,
-                name TEXT,
-                state_id INTEGER
-            )
-        """)
-        
-        # Ethno-Cultural Species
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS cultures (
-                id INTEGER PRIMARY KEY,
-                name TEXT,
-                code TEXT
-            )
-        """)
-        
-        # Religions & Deities
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS religions (
-                id INTEGER PRIMARY KEY,
-                name TEXT,
-                color TEXT,
-                supreme_deity TEXT
-            )
-        """)
-        
-        # Economic Commodities
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS production_goods (
-                cell_id INTEGER PRIMARY KEY,
-                good TEXT,
-                valuation REAL
-            )
-        """)
-        
-        # Magic Leylines Layer
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS magic_layers (
-                cell_idx INTEGER PRIMARY KEY,
-                magic_type TEXT,
-                intensity REAL
-            )
-        """)
-
-        # Snapshot timeline
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS map_snapshots (
-                year INTEGER PRIMARY KEY,
-                engine_state_json BLOB
-            )
-        """)
-        
-        # Inconsistencies & Narratives
-        cursor.execute("CREATE TABLE IF NOT EXISTS note_map_bindings (note_id INTEGER, cell_idx INTEGER UNIQUE)")
-        cursor.execute("CREATE TABLE IF NOT EXISTS markdown_map_bindings (title TEXT PRIMARY KEY, bind_type TEXT, bind_target TEXT, cell_idx INTEGER)")
-        cursor.execute("CREATE TABLE IF NOT EXISTS inconsistencies (id INTEGER PRIMARY KEY AUTOINCREMENT, description TEXT, status TEXT)")
-        cursor.execute("CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, title TEXT, content TEXT)")
-        cursor.execute("CREATE TABLE IF NOT EXISTS lore_drafts (id INTEGER PRIMARY KEY, title TEXT, content TEXT)")
-        cursor.execute("CREATE TABLE IF NOT EXISTS note_history (id INTEGER PRIMARY KEY, note_id INTEGER, title TEXT, content TEXT)")
-        
-        # Seed initial dummy data if tables are empty
-        cursor.execute("SELECT COUNT(*) FROM factions")
-        if cursor.fetchone()[0] == 0:
-            cursor.execute("INSERT INTO factions (id, name, color, expansionism_rate, treasury, tech_level) VALUES (1, 'Vulfurn Empire', '#ef4444', 1.2, 5000.0, 1)")
-            cursor.execute("INSERT INTO factions (id, name, color, expansionism_rate, treasury, tech_level) VALUES (2, 'Chipis Hegemony', '#3b82f6', 0.8, 3500.0, 1)")
-            cursor.execute("INSERT INTO provinces VALUES (101, 'North Reach', 1)")
-            cursor.execute("INSERT INTO provinces VALUES (102, 'Bay Marches', 2)")
-            cursor.execute("INSERT INTO cultures VALUES (50, 'Ostrakan', 'OS')")
-            cursor.execute("INSERT INTO cultures VALUES (51, 'Boreal Elven', 'BE')")
-            cursor.execute("INSERT INTO religions VALUES (201, 'Worship of Dawn', '#eab308', 'Deity Solis')")
-            cursor.execute("INSERT INTO magic_layers VALUES (104, 'Wild Magic Chaos Dust', 4.5)")
-            cursor.execute("INSERT INTO magic_layers VALUES (512, 'Cohesive Aether Current', 9.2)")
-            cursor.execute("INSERT INTO production_goods VALUES (12, 'Timber Hub', 1.2)")
-            cursor.execute("INSERT INTO production_goods VALUES (85, 'Iron Ore', 2.5)")
-            
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"Database initialization anomaly: {e}")
-
-class ModularMindMapCanvas(QWidget):
-    """Renders node-based visual charts for character networks and cultural lineages."""
-    def __init__(self, node_type="Relationships", parent=None):
-        super().__init__(parent)
-        self.node_type = node_type
-        self.setMinimumSize(300, 180)
-        self.nodes = []
-        self.connections = []
-        self.setStyleSheet("background-color: #0e0e13; border: 1px solid #23232a; border-radius: 6px;")
-        self.generate_nodes()
-
-    def generate_nodes(self):
-        if self.node_type == "Relationships":
-            self.nodes = [
-                {"id": 1, "label": "Protagonist", "x": 30, "y": 70},
-                {"id": 2, "label": "Rival Group", "x": 180, "y": 25},
-                {"id": 3, "label": "Mentor Order", "x": 180, "y": 115}
-            ]
-            self.connections = [(1, 2, "Enmity"), (1, 3, "Allegiance")]
-        else:
-            self.nodes = [
-                {"id": 1, "label": "Core Culture", "x": 80, "y": 70},
-                {"id": 2, "label": "Border Strain", "x": 200, "y": 70}
-            ]
-            self.connections = [(1, 2, "Linguistic Drift")]
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        for start_id, end_id, label in self.connections:
-            try:
-                n1 = next(n for n in self.nodes if n["id"] == start_id)
-                n2 = next(n for n in self.nodes if n["id"] == end_id)
-                pen = QPen(QColor("#04D361") if "Allegiance" in label or "Drift" in label else QColor("#ef4444"), 2)
-                painter.setPen(pen)
-                painter.drawLine(n1["x"] + 45, n1["y"] + 15, n2["x"] + 45, n2["y"] + 15)
-                painter.setPen(QColor("#a0a0c0"))
-                painter.drawText(int((n1["x"] + n2["x"])/2), int((n1["y"] + n2["y"])/2) - 5, label)
-            except StopIteration:
-                pass
-
-        for node in self.nodes:
-            painter.setPen(QPen(QColor("#04D361"), 1))
-            painter.setBrush(QBrush(QColor("#1e1e2e")))
-            painter.drawRoundedRect(node["x"], node["y"], 95, 30, 4, 4)
-            painter.setPen(QColor("#EEEEF8"))
-            painter.drawText(node["x"] + 8, node["y"] + 20, node["label"])
+    layer_idx = int((altitude_km + 1) // 2)
+    bottom_bound = (2 * layer_idx) - 1
+    top_bound = 2 * layer_idx
+    
+    if bottom_bound <= altitude_km <= top_bound:
+        return f"sky_{layer_idx}", float(bottom_bound), float(top_bound)
+    else:
+        return "system_buffer_zone", float(top_bound), float(top_bound + 1)
 
 
+# =============================================================================
+# DIALOG: Settlement Street Map Preview
+# =============================================================================
 class BurgMapDialog(QDialog):
     def __init__(self, burg, cell_elevation, parent=None):
         super().__init__(parent)
@@ -233,6 +108,59 @@ class BurgMapDialog(QDialog):
         painter.drawEllipse(QPointF(cx, cy), r, r)
 
 
+# =============================================================================
+# WIDGET: Custom Relationship Flowchart & Mind-Map Canvas
+# =============================================================================
+class ModularMindMapCanvas(QWidget):
+    """Renders node-based visual charts for character networks and cultural lineages."""
+    def __init__(self, node_type="Relationships", parent=None):
+        super().__init__(parent)
+        self.node_type = node_type
+        self.setMinimumSize(300, 200)
+        self.nodes = []
+        self.connections = []
+        self.setStyleSheet("background-color: #0e0e13; border: 1px solid #23232a; border-radius: 6px;")
+        self.generate_nodes()
+
+    def generate_nodes(self):
+        if self.node_type == "Relationships":
+            self.nodes = [
+                {"id": 1, "label": "Protagonist", "x": 30, "y": 80},
+                {"id": 2, "label": "Rival Group", "x": 180, "y": 30},
+                {"id": 3, "label": "Mentor Order", "x": 180, "y": 130}
+            ]
+            self.connections = [(1, 2, "Enmity"), (1, 3, "Allegiance")]
+        else:
+            self.nodes = [
+                {"id": 1, "label": "Core Culture", "x": 80, "y": 80},
+                {"id": 2, "label": "Border Strain", "x": 200, "y": 80}
+            ]
+            self.connections = [(1, 2, "Linguistic Drift")]
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        for start_id, end_id, label in self.connections:
+            n1 = next(n for n in self.nodes if n["id"] == start_id)
+            n2 = next(n for n in self.nodes if n["id"] == end_id)
+            pen = QPen(QColor("#04D361") if "Allegiance" in label or "Drift" in label else QColor("#ef4444"), 2)
+            painter.setPen(pen)
+            painter.drawLine(n1["x"] + 45, n1["y"] + 15, n2["x"] + 45, n2["y"] + 15)
+            painter.setPen(QColor("#a0a0c0"))
+            painter.drawText(int((n1["x"] + n2["x"])/2), int((n1["y"] + n2["y"])/2) - 5, label)
+
+        for node in self.nodes:
+            painter.setPen(QPen(QColor("#04D361"), 1))
+            painter.setBrush(QBrush(QColor("#1e1e2e")))
+            painter.drawRoundedRect(node["x"], node["y"], 95, 30, 4, 4)
+            painter.setPen(QColor("#EEEEF8"))
+            painter.drawText(node["x"] + 8, node["y"] + 20, node["label"])
+
+
+# =============================================================================
+# WIDGET: Symmetrical Azgaar-Style Embedded Layer Toolbox
+# =============================================================================
 class AzgaarMapToolboxWidget(QWidget):
     """Consolidates visual overlays, layer visibilities, and brush options into one workspace component."""
     def __init__(self, main_window, parent=None):
@@ -260,7 +188,7 @@ class AzgaarMapToolboxWidget(QWidget):
             "Inspect", "Height Paint", "State Paint", "Province Paint", 
             "Culture Paint", "Religion Paint", "River Paint", "Burg Paint", "Magic Paint"
         ])
-        self.brush_combo.currentTextChanged.connect(self.main_window.change_brush_mode)
+        self.brush_combo.currentTextChanged.connect(self.main_window.cb_brush_mode.setCurrentText)
         
         slide_lay = QHBoxLayout()
         slide_lay.addWidget(QLabel("Radius:"))
@@ -308,568 +236,197 @@ class AzgaarMapToolboxWidget(QWidget):
         layout.addWidget(scroll, 1)
 
 
-class AzgaarFactionSubsystemWidget(QWidget):
-    """Recreates Azgaar FMG's full spreadsheet for States and Provinces."""
-    def __init__(self, main_window):
-        super().__init__()
+# =============================================================================
+# WIDGET: Full Azgaar FMG Dedicated Sub-Windows Manager Suite
+# =============================================================================
+class FullAzgaarSubsystemsWorkspace(QWidget):
+    """Implements dedicated full-grid spreadsheet configuration panels for all map elements."""
+    def __init__(self, main_window, parent=None):
+        super().__init__(parent)
         self.main_window = main_window
         self.db_path = main_window.db_path
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(2, 2, 2, 2)
+
+        self.tabs = QTabWidget()
+        self.tabs.tabBar().setVisible(False)
+        self.tabs.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #29292E; background: #13131c; }
+            QTabBar::tab { background: #16161c; color: #A0A0C0; padding: 4px 8px; border: 1px solid #29292E; font-size: 11px; }
+            QTabBar::tab:selected { background: #13131c; color: #04D361; font-weight: bold; }
+        """)
+
+        self._init_states_tab()
+        self._init_religions_tab()
+        self._init_cultures_tab()
+        self._init_burgs_tab()
+        self._init_provinces_tab()
+        self._init_economy_tab()
+        self._init_geography_tab()
+        self._init_magic_tab()
+
+        self.layout.addWidget(self.tabs)
+
+    def _init_states_tab(self):
+        ws = QWidget(); lay = QVBoxLayout(ws)
+        self.states_table = QTableWidget(); self.states_table.setColumnCount(4)
+        self.states_table.setHorizontalHeaderLabels(["ID", "State Name", "Color", "Expansionism"])
+        self.states_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        lay.addWidget(self.states_table)
         
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<b>🏳️ Sovereign States & Provinces Ledger</b>"))
+        btn = QPushButton("➕ Add New Sovereign State")
+        btn.clicked.connect(self.add_state_row)
+        lay.addWidget(btn)
+        self.tabs.addTab(ws, "🏳️ States")
+
+    def _init_religions_tab(self):
+        ws = QWidget(); lay = QVBoxLayout(ws)
+        self.rel_table = QTableWidget(); self.rel_table.setColumnCount(3)
+        self.rel_table.setHorizontalHeaderLabels(["ID", "Religion Name", "Supreme Deity"])
+        self.rel_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        lay.addWidget(self.rel_table)
+        self.tabs.addTab(ws, "✨ Religions")
+
+    def _init_cultures_tab(self):
+        ws = QWidget(); lay = QVBoxLayout(ws)
+        self.cult_table = QTableWidget(); self.cult_table.setColumnCount(3)
+        self.cult_table.setHorizontalHeaderLabels(["ID", "Culture Name", "Lang Code"])
+        self.cult_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        lay.addWidget(self.cult_table)
         
-        self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["ID", "State Name", "Color", "Expansionism", "Actions"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.setStyleSheet("QTableWidget { background-color: #1a1a24; gridline-color: #29292E; }")
-        layout.addWidget(self.table)
+        lay.addWidget(QLabel("<b>Phonetic Language Base Onomastics Generator</b>"))
+        hb = QHBoxLayout(); self.blend_out = QLineEdit("Phonetic Drift Label"); btn = QPushButton("🎲 Blend Syllables")
+        btn.clicked.connect(lambda: self.blend_out.setText("".join(random.choices(["Thor", "Varn", "Bram", "burg", "fjord"], k=2)).capitalize()))
+        hb.addWidget(self.blend_out); hb.addWidget(btn); lay.addLayout(hb)
         
-        btn_add = QPushButton("➕ Add Sovereign State")
-        btn_add.clicked.connect(self.add_state)
-        layout.addWidget(btn_add)
+        self.cult_canvas = ModularMindMapCanvas("Cultures")
+        lay.addWidget(self.cult_canvas, 1)
+        self.tabs.addTab(ws, "🌐 Cultures")
+
+    def _init_burgs_tab(self):
+        ws = QWidget(); lay = QVBoxLayout(ws)
+        self.burgs_table = QTableWidget(); self.burgs_table.setColumnCount(4)
+        self.burgs_table.setHorizontalHeaderLabels(["ID", "Burg Name", "Population (k)", "Actions"])
+        self.burgs_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        lay.addWidget(self.burgs_table)
+        self.tabs.addTab(ws, "🏰 Burgs")
+
+    def _init_provinces_tab(self):
+        ws = QWidget(); lay = QVBoxLayout(ws)
+        self.prov_table = QTableWidget(); self.prov_table.setColumnCount(3)
+        self.prov_table.setHorizontalHeaderLabels(["ID", "Province Name", "State ID"])
+        self.prov_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        lay.addWidget(self.prov_table)
+        self.tabs.addTab(ws, "🛡️ Provinces")
+
+    def _init_economy_tab(self):
+        ws = QWidget(); lay = QVBoxLayout(ws)
+        self.econ_list = QListWidget()
+        self.econ_list.addItems(["Node 104: Timber Hub [Market Value: 1.2x]", "Node 512: Iron Ore Outpost [Market Value: 2.5x]"])
+        lay.addWidget(QLabel("<b>Production Goods &amp; Trade Commodities Ledger</b>"))
+        lay.addWidget(self.econ_list)
+        self.tabs.addTab(ws, "📦 Economy")
+
+    def _init_geography_tab(self):
+        ws = QWidget(); lay = QVBoxLayout(ws)
+        self.geo_info = QListWidget()
+        self.geo_info.addItems(["Total Continents Formed: 2 meshes", "Tectonic Stress Hotspots: Grey Triangles Active Peaks"])
+        lay.addWidget(QLabel("<b>Planetary Tectonic Plates Properties</b>"))
+        lay.addWidget(self.geo_info)
+        self.tabs.addTab(ws, "⛰️ Geography")
+
+    def _init_magic_tab(self):
+        ws = QWidget(); lay = QVBoxLayout(ws)
+        self.magic_list = QListWidget()
+        self.magic_list.addItems(["Leyline Conjunction 45: Wild Magic Infused Dust", "Leyline Conjunction 82: Aether Storm Cell Zone"])
+        lay.addWidget(QLabel("<b>Arcane Pollution Layer Registry</b>"))
+        lay.addWidget(self.magic_list)
+        self.tabs.addTab(ws, "🔮 Magic")
+
+    def refresh_all_grids(self):
+        """Loads live datasets straight from SQLite rows to match Azgaar spreadsheet data metrics."""
+        self.states_table.blockSignals(True); self.states_table.setRowCount(0)
+        self.rel_table.blockSignals(True); self.rel_table.setRowCount(0)
+        self.cult_table.blockSignals(True); self.cult_table.setRowCount(0)
+        self.burgs_table.blockSignals(True); self.burgs_table.setRowCount(0)
+        self.prov_table.blockSignals(True); self.prov_table.setRowCount(0)
         
-    def refresh_grid(self):
-        self.table.blockSignals(True)
-        self.table.setRowCount(0)
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            cursor.execute("SELECT id, name, color, expansionism_rate FROM factions")
-            rows = cursor.fetchall()
-            conn.close()
             
-            self.table.setRowCount(len(rows))
-            for r_idx, (fid, name, color, expand) in enumerate(rows):
-                self.table.setItem(r_idx, 0, QTableWidgetItem(str(fid)))
-                self.table.setItem(r_idx, 1, QTableWidgetItem(name))
+            # Populate States
+            cursor.execute("SELECT id, name, color, expansionism_rate FROM factions")
+            f_rows = cursor.fetchall()
+            self.states_table.setRowCount(len(f_rows))
+            for r_idx, (fid, name, color, expand) in enumerate(f_rows):
+                self.states_table.setItem(r_idx, 0, QTableWidgetItem(str(fid)))
+                self.states_table.setItem(r_idx, 1, QTableWidgetItem(str(name)))
+                self.states_table.setItem(r_idx, 2, QTableWidgetItem(str(color)))
+                self.states_table.setItem(r_idx, 3, QTableWidgetItem(str(expand if expand else 1.0)))
                 
-                color_btn = QPushButton()
-                color_btn.setFixedSize(24, 20)
-                color_btn.setStyleSheet(f"background-color: {color}; border: 1px solid #fff;")
-                color_btn.clicked.connect(lambda _, r=r_idx, s=fid: self.pick_color(r, s))
-                self.table.setCellWidget(r_idx, 2, color_btn)
-                
-                self.table.setItem(r_idx, 3, QTableWidgetItem(str(expand if expand else 1.0)))
-                
-                btn_del = QPushButton("❌ Delete")
-                btn_del.setStyleSheet("background-color: #ef4444; font-size: 11px;")
-                btn_del.clicked.connect(lambda _, s=fid: self.delete_state(s))
-                self.table.setCellWidget(r_idx, 4, btn_del)
-                
-            self.table.itemChanged.connect(self.handle_edited)
-        except Exception as e:
-            print(f"Error loading factions matrix: {e}")
-        self.table.blockSignals(False)
+            # Populate Religions
+            cursor.execute("SELECT id, name, supreme_deity FROM religions")
+            r_rows = cursor.fetchall()
+            self.rel_table.setRowCount(len(r_rows))
+            for r_idx, (rid, name, deity) in enumerate(r_rows):
+                self.rel_table.setItem(r_idx, 0, QTableWidgetItem(str(rid)))
+                self.rel_table.setItem(r_idx, 1, QTableWidgetItem(str(name)))
+                self.rel_table.setItem(r_idx, 2, QTableWidgetItem(str(deity if deity else "Unknown")))
 
-    def handle_edited(self, item):
-        if item.column() != 1 and item.column() != 3: return
-        row = item.row()
-        fid = int(self.table.item(row, 0).text())
+            # Populate Cultures
+            cursor.execute("SELECT id, name, code FROM cultures")
+            c_rows = cursor.fetchall()
+            self.cult_table.setRowCount(len(c_rows))
+            for r_idx, (cid, name, code) in enumerate(c_rows):
+                self.cult_table.setItem(r_idx, 0, QTableWidgetItem(str(cid)))
+                self.cult_table.setItem(r_idx, 1, QTableWidgetItem(str(name)))
+                self.cult_table.setItem(r_idx, 2, QTableWidgetItem(str(code if code else "C0")))
+
+            # Populate Burgs
+            burgs = self.main_window.map_engine.burgs
+            self.burgs_table.setRowCount(len(burgs))
+            for r_idx, b in enumerate(burgs):
+                self.burgs_table.setItem(r_idx, 0, QTableWidgetItem(str(b.get("id", r_idx))))
+                self.burgs_table.setItem(r_idx, 1, QTableWidgetItem(str(b.get("name", "Town"))))
+                self.burgs_table.setItem(r_idx, 2, QTableWidgetItem(str(b.get("population", 10))))
+                
+                btn_layout = QPushButton("🗺️ Layout")
+                btn_layout.clicked.connect(lambda _, burg_obj=b: BurgMapDialog(burg_obj, 50, self.main_window).exec())
+                self.burgs_table.setCellWidget(r_idx, 3, btn_layout)
+
+            # Populate Provinces
+            cursor.execute("SELECT id, name, state_id FROM provinces")
+            p_rows = cursor.fetchall()
+            self.prov_table.setRowCount(len(p_rows))
+            for r_idx, (pid, name, sid) in enumerate(p_rows):
+                self.prov_table.setItem(r_idx, 0, QTableWidgetItem(str(pid)))
+                self.prov_table.setItem(r_idx, 1, QTableWidgetItem(str(name)))
+                self.prov_table.setItem(r_idx, 2, QTableWidgetItem(str(sid)))
+
+            conn.close()
+        except Exception as e:
+            print(f"Spreadsheet auto-sync bypass message: {e}")
+            
+        self.states_table.blockSignals(False); self.rel_table.blockSignals(False)
+        self.cult_table.blockSignals(False); self.burgs_table.blockSignals(False); self.prov_table.blockSignals(False)
+
+    def add_state_row(self):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        if item.column() == 1:
-            cursor.execute("UPDATE factions SET name = ? WHERE id = ?", (item.text(), fid))
-        elif item.column() == 3:
-            cursor.execute("UPDATE factions SET expansionism_rate = ? WHERE id = ?", (float(item.text()), fid))
+        nid = random.randint(100, 9999)
+        hex_color = f"#{random.randint(0, 0xFFFFFF):06x}"
+        cursor.execute("INSERT INTO factions (id, name, color, expansionism_rate) VALUES (?, ?, ?, 1.0)",
+                       (nid, f"Kingdom of NewState_{nid}", hex_color))
         conn.commit()
         conn.close()
+        self.refresh_all_grids()
         self.main_window.map_viewer.update()
 
-    def pick_color(self, row, fid):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("UPDATE factions SET color = ? WHERE id = ?", (color.name(), fid))
-            conn.commit()
-            conn.close()
-            self.refresh_grid()
-            self.main_window.load_map_data_to_viewer()
 
-    def add_state(self):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        new_id = random.randint(100, 9999)
-        hex_color = f"#{random.randint(0, 0xFFFFFF):06x}"
-        cursor.execute("INSERT INTO factions (id, name, color, expansionism_rate, treasury, tech_level) VALUES (?, ?, ?, 1.0, 1000.0, 1)",
-                       (new_id, f"State_{new_id}", hex_color))
-        conn.commit()
-        conn.close()
-        self.refresh_grid()
-
-    def delete_state(self, fid):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM factions WHERE id = ?", (fid,))
-        conn.commit()
-        conn.close()
-        self.refresh_grid()
-
-
-class AzgaarReligionSubsystemWidget(QWidget):
-    """Interactive database spreadsheet for managing cults and global religions."""
-    def __init__(self, main_window):
-        super().__init__()
-        self.main_window = main_window
-        self.db_path = main_window.db_path
-        
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<b>✨ Pantheons &amp; Religions Matrix</b>"))
-        
-        self.table = QTableWidget()
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["ID", "Religion Name", "Supreme Deity", "Actions"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.setStyleSheet("QTableWidget { background-color: #1a1a24; }")
-        layout.addWidget(self.table)
-        
-        btn_add = QPushButton("➕ Instate New Religion")
-        btn_add.clicked.connect(self.add_religion)
-        layout.addWidget(btn_add)
-
-    def refresh_grid(self):
-        self.table.blockSignals(True)
-        self.table.setRowCount(0)
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, name, supreme_deity FROM religions")
-            rows = cursor.fetchall()
-            conn.close()
-            
-            self.table.setRowCount(len(rows))
-            for r_idx, (rid, name, deity) in enumerate(rows):
-                self.table.setItem(r_idx, 0, QTableWidgetItem(str(rid)))
-                self.table.setItem(r_idx, 1, QTableWidgetItem(name))
-                self.table.setItem(r_idx, 2, QTableWidgetItem(str(deity if deity else "None")))
-                
-                btn_del = QPushButton("❌ Delete")
-                btn_del.setStyleSheet("background-color: #ef4444; font-size: 11px;")
-                btn_del.clicked.connect(lambda _, r=rid: self.delete_religion(r))
-                self.table.setCellWidget(r_idx, 3, btn_del)
-                
-            self.table.itemChanged.connect(self.handle_edited)
-        except Exception as e:
-            print(f"Error loading religions: {e}")
-        self.table.blockSignals(False)
-
-    def handle_edited(self, item):
-        row = item.row()
-        rid = int(self.table.item(row, 0).text())
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        if item.column() == 1:
-            cursor.execute("UPDATE religions SET name = ? WHERE id = ?", (item.text(), rid))
-        elif item.column() == 2:
-            cursor.execute("UPDATE religions SET supreme_deity = ? WHERE id = ?", (item.text(), rid))
-        conn.commit()
-        conn.close()
-
-    def add_religion(self):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        new_id = random.randint(100, 9999)
-        cursor.execute("INSERT INTO religions (id, name, color, supreme_deity) VALUES (?, ?, '#ffd700', 'New Deity')", (new_id, f"Cult of_{new_id}"))
-        conn.commit()
-        conn.close()
-        self.refresh_grid()
-
-    def delete_religion(self, rid):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM religions WHERE id = ?", (rid,))
-        conn.commit()
-        conn.close()
-        self.refresh_grid()
-
-
-class AzgaarCultureSubsystemWidget(QWidget):
-    """Database management matrix tracking ethno-cultural lines."""
-    def __init__(self, main_window):
-        super().__init__()
-        self.main_window = main_window
-        self.db_path = main_window.db_path
-        
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<b>🌐 Cultures &amp; Ethno-Species Registry</b>"))
-        
-        self.table = QTableWidget()
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["ID", "Culture Name", "Lang Code", "Actions"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.setStyleSheet("QTableWidget { background-color: #1a1a24; }")
-        layout.addWidget(self.table)
-        
-        btn_add = QPushButton("➕ Seed New Culture")
-        btn_add.clicked.connect(self.add_culture)
-        layout.addWidget(btn_add)
-
-    def refresh_grid(self):
-        self.table.blockSignals(True)
-        self.table.setRowCount(0)
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, name, code FROM cultures")
-            rows = cursor.fetchall()
-            conn.close()
-            
-            self.table.setRowCount(len(rows))
-            for r_idx, (cid, name, code) in enumerate(rows):
-                self.table.setItem(r_idx, 0, QTableWidgetItem(str(cid)))
-                self.table.setItem(r_idx, 1, QTableWidgetItem(name))
-                self.table.setItem(r_idx, 2, QTableWidgetItem(str(code if code else "C0")))
-                
-                btn_del = QPushButton("❌ Delete")
-                btn_del.setStyleSheet("background-color: #ef4444; font-size: 11px;")
-                btn_del.clicked.connect(lambda _, c=cid: self.delete_culture(c))
-                self.table.setCellWidget(r_idx, 3, btn_del)
-                
-            self.table.itemChanged.connect(self.handle_edited)
-        except Exception as e:
-            print(f"Error loading cultures: {e}")
-        self.table.blockSignals(False)
-
-    def handle_edited(self, item):
-        row = item.row()
-        cid = int(self.table.item(row, 0).text())
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        if item.column() == 1:
-            cursor.execute("UPDATE cultures SET name = ? WHERE id = ?", (item.text(), cid))
-        elif item.column() == 2:
-            cursor.execute("UPDATE cultures SET code = ? WHERE id = ?", (item.text(), cid))
-        conn.commit()
-        conn.close()
-
-    def add_culture(self):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        new_id = random.randint(100, 9999)
-        cursor.execute("INSERT INTO cultures (id, name, code) VALUES (?, ?, 'C0')", (new_id, f"Culture_{new_id}"))
-        conn.commit()
-        conn.close()
-        self.refresh_grid()
-
-    def delete_culture(self, cid):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM cultures WHERE id = ?", (cid,))
-        conn.commit()
-        conn.close()
-        self.refresh_grid()
-
-
-class AzgaarMilitarySubsystemWidget(QWidget):
-    """Regiment & standing armies mobilization tracker."""
-    def __init__(self, main_window):
-        super().__init__()
-        self.main_window = main_window
-        
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<b>⚔️ Regimental deployments and standing military</b>"))
-        
-        self.regiment_list = QListWidget()
-        self.regiment_list.addItems([
-            "Regiment 104: Iron Shield Legion [Stationed: Core Capitol]",
-            "Regiment 512: Griffin Vanguard [Stationed: Boreal Border Range]"
-        ])
-        layout.addWidget(self.regiment_list)
-        
-        btn_add = QPushButton("⚔️ Mobilize Standby Regiment")
-        btn_add.clicked.connect(lambda: self.regiment_list.addItem(f"Regiment {random.randint(100,999)}: Heavy Vanguard Battalion"))
-        layout.addWidget(btn_add)
-
-
-class AzgaarEconomySubsystemWidget(QWidget):
-    """Trade goods ledgers and mineral commodities matrices."""
-    def __init__(self, main_window):
-        super().__init__()
-        self.main_window = main_window
-        self.db_path = main_window.db_path
-        
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<b>📦 Commodities Extraction &amp; Valuation Registry</b>"))
-        
-        self.table = QTableWidget()
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["Cell ID", "Trade Good Type", "Resource Value", "Actions"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.setStyleSheet("QTableWidget { background-color: #1a1a24; }")
-        layout.addWidget(self.table)
-        
-        btn_add = QPushButton("➕ Instate Resource Extraction Hub")
-        btn_add.clicked.connect(self.add_economic_hub)
-        layout.addWidget(btn_add)
-
-    def refresh_grid(self):
-        self.table.blockSignals(True)
-        self.table.setRowCount(0)
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT cell_id, good, valuation FROM production_goods")
-            rows = cursor.fetchall()
-            conn.close()
-            
-            self.table.setRowCount(len(rows))
-            for r_idx, (cid, good, value) in enumerate(rows):
-                self.table.setItem(r_idx, 0, QTableWidgetItem(str(cid)))
-                self.table.setItem(r_idx, 1, QTableWidgetItem(good))
-                self.table.setItem(r_idx, 2, QTableWidgetItem(str(value if value else 1.0)))
-                
-                btn_del = QPushButton("❌ Shut Down")
-                btn_del.setStyleSheet("background-color: #ef4444; font-size: 11px;")
-                btn_del.clicked.connect(lambda _, c=cid: self.delete_hub(c))
-                self.table.setCellWidget(r_idx, 3, btn_del)
-                
-            self.table.itemChanged.connect(self.handle_edited)
-        except Exception as e:
-            print(f"Error loading commodities: {e}")
-        self.table.blockSignals(False)
-
-    def handle_edited(self, item):
-        row = item.row()
-        cid = int(self.table.item(row, 0).text())
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        if item.column() == 1:
-            cursor.execute("UPDATE production_goods SET good = ? WHERE cell_id = ?", (item.text(), cid))
-        elif item.column() == 2:
-            cursor.execute("UPDATE production_goods SET valuation = ? WHERE cell_id = ?", (float(item.text()), cid))
-        conn.commit()
-        conn.close()
-
-    def add_economic_hub(self):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        new_cell = random.randint(1, 1000)
-        cursor.execute("INSERT OR REPLACE INTO production_goods VALUES (?, 'Timber Outpost', 1.5)", (new_cell,))
-        conn.commit()
-        conn.close()
-        self.refresh_grid()
-
-    def delete_hub(self, cid):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM production_goods WHERE cell_id = ?", (cid,))
-        conn.commit()
-        conn.close()
-        self.refresh_grid()
-
-
-class AzgaarEcologySubsystemWidget(QWidget):
-    """Tracks Whittaker climatic boundaries and custom biomes parameters."""
-    def __init__(self, main_window):
-        super().__init__()
-        self.main_window = main_window
-        
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<b>🌿 Whittaker Climatic Biomes &amp; Moisture Bands</b>"))
-        
-        self.biomes_list = QListWidget()
-        self.biomes_list.addItems([
-            "Biome Class 0: Tropical Rainforest [Moisture: High, Temp: Hot]",
-            "Biome Class 1: Boreal Taiga [Moisture: Moderate, Temp: Frost]",
-            "Biome Class 2: Arid Desert Wastes [Moisture: Null, Temp: Extreme]"
-        ])
-        layout.addWidget(self.biomes_list)
-
-
-class AzgaarBurgSubsystemWidget(QWidget):
-    """High-density urban layout generator and burg directory."""
-    def __init__(self, main_window):
-        super().__init__()
-        self.main_window = main_window
-        self.db_path = main_window.db_path
-        
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<b>🏰 Towns &amp; Burgs High-Density Registry</b>"))
-        
-        self.table = QTableWidget()
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["ID", "Burg Name", "Population (k)", "Actions"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.setStyleSheet("QTableWidget { background-color: #1a1a24; }")
-        layout.addWidget(self.table)
-
-    def refresh_grid(self):
-        self.table.setRowCount(0)
-        burgs = self.main_window.map_engine.burgs
-        self.table.setRowCount(len(burgs))
-        for r_idx, b in enumerate(burgs):
-            self.table.setItem(r_idx, 0, QTableWidgetItem(str(b.get("id", r_idx))))
-            self.table.setItem(r_idx, 1, QTableWidgetItem(str(b.get("name", "Settlement"))))
-            self.table.setItem(r_idx, 2, QTableWidgetItem(str(b.get("population", 12))))
-            
-            btn_layout = QPushButton("🗺️ Street View")
-            btn_layout.clicked.connect(lambda _, burg_obj=b: BurgMapDialog(burg_obj, 50, self.main_window).exec())
-            self.table.setCellWidget(r_idx, 3, btn_layout)
-
-
-class AzgaarGeographySubsystemWidget(QWidget):
-    """Volcanic hazard maps and orographic lift plate properties."""
-    def __init__(self, main_window):
-        super().__init__()
-        self.main_window = main_window
-        
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<b>⛰️ Orographic Lift &amp; Volcanic Stress Vectors</b>"))
-        
-        self.plates_list = QListWidget()
-        self.plates_list.addItems([
-            "Continental Plate 1 [Vector: Northeast Drift, Velocity: Extreme]",
-            "Maritime Oceanic Plate 2 [Vector: Collision Point West]"
-        ])
-        layout.addWidget(self.plates_list)
-
-
-class AzgaarMagicSubsystemWidget(QWidget):
-    """Mage tower magic channels and reality stability layers."""
-    def __init__(self, main_window):
-        super().__init__()
-        self.main_window = main_window
-        self.db_path = main_window.db_path
-        
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<b>🔮 Arcane Pollution &amp; Leylines Layer</b>"))
-        
-        self.table = QTableWidget()
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["Cell Index", "Mana Contamination Tag", "Actions"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.setStyleSheet("QTableWidget { background-color: #1a1a24; }")
-        layout.addWidget(self.table)
-        
-        btn_add = QPushButton("🔮 Seed Leyline Node")
-        btn_add.clicked.connect(self.add_leyline)
-        layout.addWidget(btn_add)
-
-    def refresh_grid(self):
-        self.table.blockSignals(True)
-        self.table.setRowCount(0)
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT cell_idx, magic_type FROM magic_layers")
-            rows = cursor.fetchall()
-            conn.close()
-            
-            self.table.setRowCount(len(rows))
-            for r_idx, (c_idx, m_type) in enumerate(rows):
-                self.table.setItem(r_idx, 0, QTableWidgetItem(str(c_idx)))
-                self.table.setItem(r_idx, 1, QTableWidgetItem(str(m_type)))
-                
-                btn_del = QPushButton("❌ Demolish")
-                btn_del.setStyleSheet("background-color: #ef4444; font-size: 11px;")
-                btn_del.clicked.connect(lambda _, c=c_idx: self.delete_leyline(c))
-                self.table.setCellWidget(r_idx, 2, btn_del)
-                
-            self.table.itemChanged.connect(self.handle_edited)
-        except Exception as e:
-            print(f"Error loading magic layer: {e}")
-        self.table.blockSignals(False)
-
-    def handle_edited(self, item):
-        row = item.row()
-        c_idx = int(self.table.item(row, 0).text())
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        if item.column() == 1:
-            cursor.execute("UPDATE magic_layers SET magic_type = ? WHERE cell_idx = ?", (item.text(), c_idx))
-        conn.commit()
-        conn.close()
-
-    def add_leyline(self):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        new_idx = random.randint(1, 1000)
-        cursor.execute("INSERT OR REPLACE INTO magic_layers VALUES (?, 'Cohesive Arcane Leyline', 5.0)", (new_idx,))
-        conn.commit()
-        conn.close()
-        self.refresh_grid()
-
-    def delete_leyline(self, c_idx):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM magic_layers WHERE cell_idx = ?", (c_idx,))
-        conn.commit()
-        conn.close()
-        self.refresh_grid()
-
-
-class AzgaarTechnologySubsystemWidget(QWidget):
-    """Technological milestones and resource extraction matrices."""
-    def __init__(self, main_window):
-        super().__init__()
-        self.main_window = main_window
-        
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<b>⚙️ Worldly Technological Epochs &amp; Era progression</b>"))
-        
-        self.eras_list = QListWidget()
-        self.eras_list.addItems([
-            "Active Era: High clockwork lattice age",
-            "Sovereign Core dependencies: Solid Condensed Dragonstone Showers"
-        ])
-        layout.addWidget(self.eras_list)
-
-
-class AzgaarMarkersSubsystemWidget(QWidget):
-    """Dynamic index for notes pinned directly onto map elements."""
-    def __init__(self, main_window):
-        super().__init__()
-        self.main_window = main_window
-        self.db_path = main_window.db_path
-        
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<b>📍 Markers &amp; Narrative Note Bindings Directory</b>"))
-        
-        self.table = QTableWidget()
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["Note ID", "Map Cell ID", "Actions"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.setStyleSheet("QTableWidget { background-color: #1a1a24; }")
-        layout.addWidget(self.table)
-        
-        btn_add = QPushButton("📌 Bind Narrative Note Point")
-        btn_add.clicked.connect(self.main_window.open_bind_dialog)
-        layout.addWidget(btn_add)
-
-    def refresh_grid(self):
-        self.table.setRowCount(0)
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT note_id, cell_idx FROM note_map_bindings")
-            rows = cursor.fetchall()
-            conn.close()
-            
-            self.table.setRowCount(len(rows))
-            for r_idx, (note_id, cell_idx) in enumerate(rows):
-                self.table.setItem(r_idx, 0, QTableWidgetItem(str(note_id)))
-                self.table.setItem(r_idx, 1, QTableWidgetItem(str(cell_idx)))
-                
-                btn_del = QPushButton("❌ Remove Pin")
-                btn_del.setStyleSheet("background-color: #ef4444; font-size: 11px;")
-                btn_del.clicked.connect(lambda _, n=note_id: self.delete_marker_pin(n))
-                self.table.setCellWidget(r_idx, 2, btn_del)
-        except Exception as e:
-            print(f"Error loading markers: {e}")
-
-    def delete_marker_pin(self, note_id):
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM note_map_bindings WHERE note_id = ?", (note_id,))
-            conn.commit()
-            conn.close()
-            self.refresh_grid()
-        except Exception as e:
-            print(e)
-
-
+# =============================================================================
+# MAIN WINDOW: LORDSMITH SANDBOX DUAL-BAY PLATFORM
+# =============================================================================
 class WorldsmithMainWindow(QMainWindow):
 
     def __init__(self, project_dir):
@@ -881,9 +438,8 @@ class WorldsmithMainWindow(QMainWindow):
         self.setStyleSheet("background: #111116; color: #EEEEF8;")
         self.start_ollama_server()
 
+        # Data paths maps definitions
         self.db_path = os.path.join(self.project_dir, "lore_forge_world.db")
-        initialize_complete_sandbox_db(self.db_path)
-
         self.ai_worker    = None
         self.audit_worker = None
         self.selected_cell_idx = None
@@ -894,11 +450,12 @@ class WorldsmithMainWindow(QMainWindow):
         self.custom_seasons     = ["Sowing-Time", "High-Sun", "Gold-Leaf", "Deep-Frost"]
         self.cosmos_engine      = CosmosEngine(self.custom_year_length, self.custom_seasons)
         self.map_engine = AzgaarEngine()
+        self._session_msg_count = 0
 
         self._apply_stylesheet()
         self._build_top_windows_menu()
 
-        # Hidden slots to maintain compatibility
+        # --- Compatibility Placeholder Hidden Slots ---
         self.cb_layer = QComboBox(self); self.cb_layer.hide()
         self.chk_layer_visibility = QCheckBox(self); self.chk_layer_visibility.hide()
         self.cb_brush_mode = QComboBox(self)
@@ -909,7 +466,7 @@ class WorldsmithMainWindow(QMainWindow):
         self.cb_edit_element = QComboBox(self); self.cb_edit_element.hide()
         self.cb_tools = QComboBox(self); self.cb_tools.hide()
 
-        # Symmetrical Layout Splitters
+        # --- Symmetrical Flanking Splits Framework ---
         self.master_layout = QHBoxLayout()
         self.master_layout.setContentsMargins(0, 0, 0, 0)
         self.master_layout.setSpacing(0)
@@ -939,6 +496,7 @@ class WorldsmithMainWindow(QMainWindow):
         fb_layout.addWidget(self.file_tree)
         self.master_layout.addWidget(self.file_browser_sidebar)
 
+        # Main splitter workspace container row
         self.workspace_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.workspace_splitter.setStyleSheet("QSplitter::handle { background: #29292E; width: 3px; }")
         self.master_layout.addWidget(self.workspace_splitter, 1)
@@ -1043,18 +601,8 @@ class WorldsmithMainWindow(QMainWindow):
         tl_lay.addWidget(self.celestial_widget)
         tl_lay.addStretch()
 
-        # Initialize the dynamic widgets for left panel database spreadsheet managers
-        self.states_provinces_panel = AzgaarFactionSubsystemWidget(self)
-        self.religions_panel = AzgaarReligionSubsystemWidget(self)
-        self.cultures_panel = AzgaarCultureSubsystemWidget(self)
-        self.military_panel = AzgaarMilitarySubsystemWidget(self)
-        self.economy_panel = AzgaarEconomySubsystemWidget(self)
-        self.ecology_panel = AzgaarEcologySubsystemWidget(self)
-        self.burgs_panel = AzgaarBurgSubsystemWidget(self)
-        self.geography_panel = AzgaarGeographySubsystemWidget(self)
-        self.magic_panel = AzgaarMagicSubsystemWidget(self)
-        self.technology_panel = AzgaarTechnologySubsystemWidget(self)
-        self.markers_panel = AzgaarMarkersSubsystemWidget(self)
+        # Full-Featured Dataset Manager Suite
+        self.azgaar_spreadsheet_suite_layer = FullAzgaarSubsystemsWorkspace(self)
 
         # Right Twin Options Pools
         self.azgaar_brush_toolbox_right = AzgaarMapToolboxWidget(self)
@@ -1104,87 +652,35 @@ class WorldsmithMainWindow(QMainWindow):
             self.azgaar_brush_toolbox_right.show()
 
         elif selected_pane_text == "Markers Directory":
-            left_layout.addWidget(self.markers_panel)
-            self.markers_panel.refresh_grid()
-            self.markers_panel.show()
+            left_layout.addWidget(self.timeline_cosmology_viewport_layer)
+            self.timeline_cosmology_viewport_layer.show()
             
             # Markers/Cosmology view couples to the chronological year progression sliders
             right_layout.addWidget(self.timeline_sliders_right)
             self.timeline_sliders_right.show()
 
-        elif selected_pane_text == "States &amp; Countries Table":
-            left_layout.addWidget(self.states_provinces_panel)
-            self.states_provinces_panel.refresh_grid()
-            self.states_provinces_panel.show()
+        else:
+            # Map all individual Azgaar FMG full data management panels
+            left_layout.addWidget(self.azgaar_spreadsheet_suite_layer)
+            self.azgaar_spreadsheet_suite_layer.show()
             
             # Spreadsheet views couple to the background AI lore terminal audit logs on the right
             right_layout.addWidget(self.ai_workflow_terminal_right)
             self.ai_workflow_terminal_right.show()
 
-        elif selected_pane_text == "Provinces Registry":
-            left_layout.addWidget(self.states_provinces_panel)
-            self.states_provinces_panel.refresh_grid()
-            self.states_provinces_panel.show()
-            right_layout.addWidget(self.ai_workflow_terminal_right)
-            self.ai_workflow_terminal_right.show()
-
-        elif selected_pane_text == "Religions Matrix":
-            left_layout.addWidget(self.religions_panel)
-            self.religions_panel.refresh_grid()
-            self.religions_panel.show()
-            right_layout.addWidget(self.ai_workflow_terminal_right)
-            self.ai_workflow_terminal_right.show()
-            
-        elif selected_pane_text == "Cultures &amp; Languages":
-            left_layout.addWidget(self.cultures_panel)
-            self.cultures_panel.refresh_grid()
-            self.cultures_panel.show()
-            right_layout.addWidget(self.ai_workflow_terminal_right)
-            self.ai_workflow_terminal_right.show()
-            
-        elif selected_pane_text == "Standing Military Units":
-            left_layout.addWidget(self.military_panel)
-            self.military_panel.show()
-            right_layout.addWidget(self.ai_workflow_terminal_right)
-            self.ai_workflow_terminal_right.show()
-            
-        elif selected_pane_text == "Economic Commodities":
-            left_layout.addWidget(self.economy_panel)
-            self.economy_panel.refresh_grid()
-            self.economy_panel.show()
-            right_layout.addWidget(self.ai_workflow_terminal_right)
-            self.ai_workflow_terminal_right.show()
-            
-        elif selected_pane_text == "Ecology &amp; Biomes":
-            left_layout.addWidget(self.ecology_panel)
-            self.ecology_panel.show()
-            right_layout.addWidget(self.ai_workflow_terminal_right)
-            self.ai_workflow_terminal_right.show()
-            
-        elif selected_pane_text == "Burgs &amp; Settlements":
-            left_layout.addWidget(self.burgs_panel)
-            self.burgs_panel.refresh_grid()
-            self.burgs_panel.show()
-            right_layout.addWidget(self.ai_workflow_terminal_right)
-            self.ai_workflow_terminal_right.show()
-            
-        elif selected_pane_text == "Geography Tectonics":
-            left_layout.addWidget(self.geography_panel)
-            self.geography_panel.show()
-            right_layout.addWidget(self.ai_workflow_terminal_right)
-            self.ai_workflow_terminal_right.show()
-            
-        elif selected_pane_text == "Magic Leylines Layer":
-            left_layout.addWidget(self.magic_panel)
-            self.magic_panel.refresh_grid()
-            self.magic_panel.show()
-            right_layout.addWidget(self.ai_workflow_terminal_right)
-            self.ai_workflow_terminal_right.show()
+            # Shift dynamic spreadsheets tab indices natively to match choices
+            tab_index_map = {
+                "States &amp; Countries Table": 0, "Religions Matrix": 1, "Cultures &amp; Languages": 2,
+                "Burgs &amp; Settlements": 3, "Provinces Registry": 4, "Economic Commodities": 5,
+                "Geography Tectonics": 6, "Magic Leylines Layer": 7
+            }
+            target_idx = tab_index_map.get(selected_pane_text, 0)
+            self.azgaar_spreadsheet_suite_layer.tabs.setCurrentIndex(target_idx)
+            self.azgaar_spreadsheet_suite_layer.refresh_all_grids()
 
         self.workspace_splitter.refresh()
 
     def start_ollama_server(self):
-
         import subprocess
         import urllib.request
         try:
