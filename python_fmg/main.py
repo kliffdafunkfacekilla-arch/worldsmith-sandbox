@@ -8,7 +8,8 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
     QTextEdit, QLabel, QLineEdit, QPushButton, QStatusBar, QMessageBox, QComboBox,
     QSlider, QFileDialog, QDialog, QListWidget, QInputDialog, QCheckBox,
-    QFrame, QToolButton, QScrollArea, QMenu, QTableWidget, QTableWidgetItem, QCompleter, QTreeView
+    QFrame, QToolButton, QScrollArea, QMenu, QTableWidget, QTableWidgetItem, QCompleter, QTreeView,
+    QGroupBox, QTabWidget
 )
 from PyQt6.QtCore import Qt, QPointF, QPoint, pyqtSignal, QTimer, QDir
 from PyQt6.QtGui import (
@@ -619,6 +620,344 @@ class BrushSettingsWidget(QWidget):
 
 
 # =============================================================================
+# WIDGET: Unified Azgaar-Style Map Toolbox Panel
+# =============================================================================
+class AzgaarMapToolboxWidget(QScrollArea):
+    """
+    Consolidates all visual map overlays, interactive brushes, parameter inputs, 
+    and secondary element data table buttons into a single unified workspace component.
+    """
+    def __init__(self, main_window, parent=None):
+        super().__init__(parent)
+        self.main_window = main_window
+        self.setWidgetResizable(True)
+        self.setStyleSheet("QScrollArea { border: none; background-color: #13131c; }")
+        
+        self.main_container = QWidget()
+        self.main_container.setStyleSheet("background-color: #13131c; color: #EEEEF8;")
+        self.layout = QVBoxLayout(self.main_container)
+        self.layout.setContentsMargins(8, 8, 8, 8)
+        self.layout.setSpacing(10)
+        self.setWidget(self.main_container)
+        
+        self._build_toolbox_ui()
+
+    def _build_toolbox_ui(self):
+        # --- Section 1: Baseline Generation Commands ---
+        gen_group = QGroupBox("Core Operations")
+        gen_layout = QHBoxLayout(gen_group)
+        gen_layout.setContentsMargins(6, 8, 6, 8)
+        
+        btn_regen = QPushButton("🎲 New World")
+        btn_regen.setToolTip("Procedurally regenerate all map layers and vectors")
+        btn_regen.clicked.connect(self.main_window.trigger_world_regeneration)
+        
+        gen_layout.addWidget(btn_regen)
+        self.layout.addWidget(gen_group)
+
+        # --- Section 2: Element Registry Tables (Azgaar Sub-Windows) ---
+        table_group = QGroupBox("Database Data Editors")
+        table_layout = QVBoxLayout(table_group)
+        table_layout.setSpacing(4)
+        
+        table_defs = [
+            ("States Territory Matrix", "States Table"),
+            ("Ethno-Linguistic Cultures", "Cultures Table"),
+            ("Pantheons & Religions", "Religions Table"),
+            ("Settlements & Burgs Grid", "Burgs Table")
+        ]
+        
+        for label, table_key in table_defs:
+            btn = QPushButton(f"📋 {label}")
+            btn.setStyleSheet("QPushButton { text-align: left; padding-left: 10px; background: #1a1a24; }")
+            btn.clicked.connect(lambda _, tk=table_key: self.main_window.open_element_table_editor(tk))
+            table_layout.addWidget(btn)
+            
+        self.layout.addWidget(table_group)
+
+        # --- Section 3: Core Interactive Brushes matrix ---
+        brush_group = QGroupBox("Interactive Canvas Brushes")
+        brush_layout = QVBoxLayout(brush_group)
+        
+        self.cb_brush_mode_selector = QComboBox()
+        self.cb_brush_mode_selector.addItems([
+            "Inspect", "Height Paint", "Height Raise", "Height Lower", "Height Smooth",
+            "State Paint", "Province Paint", "Culture Paint", "Religion Paint", "River Paint", "Burg Paint",
+            "Biome Paint", "Production Paint", "Road Paint", "Military Paint"
+        ])
+        self.cb_brush_mode_selector.currentTextChanged.connect(self.main_window.cb_brush_mode.setCurrentText)
+        
+        # Sync size adjustments directly here
+        slider_layout = QHBoxLayout()
+        slider_layout.addWidget(QLabel("Radius:"))
+        self.brush_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brush_slider.setRange(1, 4)
+        self.brush_slider.setValue(1)
+        self.brush_slider.valueChanged.connect(self.main_window.change_brush_size)
+        slider_layout.addWidget(self.brush_slider)
+        
+        brush_layout.addWidget(QLabel("Brush Target Mode:"))
+        brush_layout.addWidget(self.cb_brush_mode_selector)
+        brush_layout.addLayout(slider_layout)
+        self.layout.addWidget(brush_group)
+
+        # --- Section 4: Master Layers Visibility Matrix ---
+        layers_group = QGroupBox("Visual Layer Overlays")
+        layers_layout = QVBoxLayout(layers_group)
+        layers_layout.setSpacing(2)
+        
+        LAYERS = [
+            ("Elevation", "E"), ("Biomes", "B"), ("Political States", "P"),
+            ("Provinces", "V"), ("Cultures", "C"), ("Religions", "R"),
+            ("Magic Layer", "*"), ("Production Goods", "G"), ("Rivers", "~"),
+            ("Roads", "-"), ("Military Regiments", "X"), ("Burgs", "H"),
+            ("Underworld & Crime", "🏴☠️"), ("Sky Layer 1 (1-2km)", "🌌"),
+            ("Subterranean (0-20ft)", "⛏️")
+        ]
+        
+        for layer_key, icon in LAYERS:
+            row = QWidget()
+            row_l = QHBoxLayout(row)
+            row_l.setContentsMargins(4, 2, 4, 2)
+            
+            lbl_name = QLabel(f"{icon} {layer_key}")
+            lbl_name.setStyleSheet("font-size: 12px;")
+            
+            chk_vis = QCheckBox()
+            chk_vis.setChecked(self.main_window.map_viewer.visibility_map.get(layer_key, True))
+            chk_vis.stateChanged.connect(lambda state, lk=layer_key: self.main_window._set_layer_visibility(lk, state == 2))
+            
+            btn_edit = QToolButton()
+            btn_edit.setText("⚙")
+            btn_edit.setFixedSize(20, 20)
+            btn_edit.clicked.connect(lambda _, lk=layer_key: self.main_window._open_layer_editor(lk))
+            
+            row_l.addWidget(lbl_name, 1)
+            row_l.addWidget(chk_vis)
+            row_l.addWidget(btn_edit)
+            layers_layout.addWidget(row)
+            
+        self.layout.addWidget(layers_group)
+        self.layout.addStretch()
+
+
+# =============================================================================
+# WIDGET: Template Workspace Suite (Tabbed Reactive Right-Bay Component)
+# =============================================================================
+class ModularMindMapCanvas(QWidget):
+    def __init__(self, title="Mind Map", parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        lbl = QLabel(f"[{title} Canvas Placeholder]")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setStyleSheet("color: #8888AA; border: 1px dashed #444466;")
+        layout.addWidget(lbl)
+
+class TemplateWorkspaceSuite(QWidget):
+    """
+    Centrally manages workspaces for ALL available template categories in the lore ledger.
+    Provides data row entry modifiers alongside custom dedicated workflow modules.
+    """
+    def __init__(self, main_window, parent=None):
+        super().__init__(parent)
+        self.main_window = main_window
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(4, 4, 4, 4)
+        
+        self.tabs = QTabWidget()
+        self.tabs.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #29292E; background: #13131c; }
+            QTabBar::tab { background: #16161c; color: #A0A0C0; padding: 6px 10px; border: 1px solid #29292E; font-size: 11px; }
+            QTabBar::tab:selected { background: #13131c; color: #04D361; border-bottom-color: #13131c; font-weight: bold; }
+        """)
+        
+        # Build out slots for ALL structural lore categories
+        self._assemble_character_workspace()
+        self._assemble_location_history_workspace()
+        self._assemble_culture_workspace()
+        self._assemble_faction_states_workspace()
+        self._assemble_religion_workspace()
+        self._assemble_provinces_workspace()
+        self._assemble_biomes_eco_workspace()
+        self._assemble_elevation_volcanic_workspace()
+        self._assemble_tech_era_workspace()
+        
+        self.layout.addWidget(self.tabs)
+
+    def _build_standard_crud_header(self, layout, combo_widget, item_list, on_add_cb, on_del_cb):
+        """Helper to inject uniform element lists and action buttons into headers."""
+        ctrl_layout = QHBoxLayout()
+        combo_widget.addItems(item_list)
+        
+        btn_add = QPushButton("➕ Add")
+        btn_add.clicked.connect(on_add_cb)
+        btn_del = QPushButton("🗑️ Remove")
+        btn_del.clicked.connect(on_del_cb)
+        btn_pin = QPushButton("📌 Pin")
+        btn_pin.clicked.connect(self.main_window.open_bind_dialog)
+        
+        ctrl_layout.addWidget(combo_widget, 1)
+        ctrl_layout.addWidget(btn_add)
+        ctrl_layout.addWidget(btn_del)
+        ctrl_layout.addWidget(btn_pin)
+        layout.addLayout(ctrl_layout)
+
+    def _assemble_character_workspace(self):
+        ws = QWidget()
+        lay = QVBoxLayout(ws)
+        self.cb_chars = QComboBox()
+        self._build_standard_crud_header(lay, self.cb_chars, ["Select Character...", "Enzo the Silk Finger", "Lord Vance"], lambda: print("Add Char"), lambda: print("Del Char"))
+        
+        lay.addWidget(QLabel("<b>Character Relationship Flow Chart / Mind Map</b>"))
+        self.char_canvas = ModularMindMapCanvas("Relationships")
+        lay.addWidget(self.char_canvas, 1)
+        self.tabs.addTab(ws, "👤 Chars")
+
+    def _assemble_location_history_workspace(self):
+        ws = QWidget()
+        lay = QVBoxLayout(ws)
+        self.cb_locs = QComboBox()
+        self._build_standard_crud_header(lay, self.cb_locs, ["Select Landmark...", "The Obsidian Citadel", "Iron Hold"], lambda: print("Add Loc"), lambda: print("Del Loc"))
+        
+        lay.addWidget(QLabel("<b>Chronological History Logs &amp; Timeline Access Hub</b>"))
+        btn_time_sync = QPushButton("⏳ Snap Timeline Slider to Event Origin Year")
+        btn_time_sync.setStyleSheet("background-color: #1a1a30; border-color: #04D361;")
+        btn_time_sync.clicked.connect(lambda: self.main_window.timeline_slider.setValue(412 * self.main_window.custom_year_length) if hasattr(self.main_window, 'timeline_slider') else None)
+        lay.addWidget(btn_time_sync)
+        
+        self.history_list = QListWidget()
+        self.history_list.addItems(["Year 104: Foundation Stone laid by early Pioneers.", "Year 412: Captured during the Gold-Leaf Border Skirmish."])
+        lay.addWidget(self.history_list, 1)
+        self.tabs.addTab(ws, "📍 Locations")
+
+    def _assemble_culture_workspace(self):
+        ws = QWidget()
+        lay = QVBoxLayout(ws)
+        self.cb_cults = QComboBox()
+        self._build_standard_crud_header(lay, self.cb_cults, ["Ostraka Mammalian", "Ostraka Reptilian", "Ostraka Aquatic"], lambda: print("Add Cult"), lambda: print("Del Cult"))
+        
+        lay.addWidget(QLabel("<b>Phonetic Language Blender &amp; Onomastics Generator</b>"))
+        blend_box = QWidget()
+        blend_lay = QHBoxLayout(blend_box)
+        blend_lay.setContentsMargins(0,0,0,0)
+        self.lbl_blend_out = QLineEdit("Procedural Word Output")
+        self.lbl_blend_out.setReadOnly(True)
+        btn_blend = QPushButton("🎲 Blend Syllables")
+        btn_blend.clicked.connect(lambda: self.lbl_blend_out.setText(
+            self.main_window.map_engine.name_gen.generate_blended_border_name("Ostraka Mammalian", "Ostraka Reptilian")
+            if hasattr(self.main_window.map_engine, "name_gen") else "MorphemeBlendedLabel"
+        ))
+        blend_lay.addWidget(self.lbl_blend_out, 1)
+        blend_lay.addWidget(btn_blend)
+        lay.addLayout(blend_box)
+        
+        lay.addWidget(QLabel("<b>Cross-Cultural Lineage Friction &amp; Migration Paths Matrix</b>"))
+        self.cult_canvas = ModularMindMapCanvas("Cultures")
+        lay.addWidget(self.cult_canvas, 1)
+        self.tabs.addTab(ws, "🌐 Cultures")
+
+    def _assemble_faction_states_workspace(self):
+        ws = QWidget()
+        lay = QVBoxLayout(ws)
+        self.cb_factions = QComboBox()
+        self._build_standard_crud_header(lay, self.cb_factions, ["Empire of Vulfurn", "Empire of Chipis", "Empire of Orear"], lambda: print("Add Fact"), lambda: print("Del Fact"))
+        
+        lay.addWidget(QLabel("<b>Geopolitical Faction Vector Metrics</b>"))
+        from PyQt6.QtWidgets import QFormLayout, QDoubleSpinBox
+        form = QFormLayout()
+        self.sp_expansion = QDoubleSpinBox(); self.sp_expansion.setRange(0.0, 3.0); self.sp_expansion.setValue(1.5)
+        self.sp_treasury = QDoubleSpinBox(); self.sp_treasury.setRange(0.0, 1000000.0); self.sp_treasury.setValue(5000.0)
+        form.addRow("Expansionism Rate:", self.sp_expansion)
+        form.addRow("Treasury Balance ($):", self.sp_treasury)
+        lay.addLayout(form)
+        
+        lay.addWidget(QLabel("<b>Strategic Threat Matrix Mind Map</b>"))
+        self.faction_canvas = ModularMindMapCanvas("Relationships")
+        lay.addWidget(self.faction_canvas, 1)
+        self.tabs.addTab(ws, "🏴 Factions")
+
+    def _assemble_religion_workspace(self):
+        ws = QWidget()
+        lay = QVBoxLayout(ws)
+        self.cb_religions = QComboBox()
+        self._build_standard_crud_header(lay, self.cb_religions, ["Select Religion...", "The Eternal Dawn", "Worm Cult of the Crushed", "Worm Cult of Toxic Liquidity"], lambda: print("Add Rel"), lambda: print("Del Rel"))
+        
+        lay.addWidget(QLabel("<b>Holy Sites Registry &amp; Power Level Allocation</b>"))
+        self.religion_list = QListWidget()
+        self.religion_list.addItems(["Site: Crag Osmni (Power Tier: High)", "Site: Snowpeak Citadel (Power Tier: Critical)"])
+        lay.addWidget(self.religion_list, 1)
+        self.tabs.addTab(ws, "✨ Religions")
+
+    def _assemble_provinces_workspace(self):
+        ws = QWidget()
+        lay = QVBoxLayout(ws)
+        self.cb_provinces = QComboBox()
+        self._build_standard_crud_header(lay, self.cb_provinces, ["Select Province...", "North Reach", "Canopy Verge", "Pearl Terraces"], lambda: print("Add Prov"), lambda: print("Del Prov"))
+        
+        lay.addWidget(QLabel("<b>Provincial Taxation &amp; Resource Vector Configuration</b>"))
+        from PyQt6.QtWidgets import QFormLayout, QDoubleSpinBox
+        form = QFormLayout()
+        self.txt_governor = QLineEdit("Grand Auditor Keth")
+        self.sp_tax_rate = QDoubleSpinBox(); self.sp_tax_rate.setRange(0.0, 100.0); self.sp_tax_rate.setValue(12.5)
+        form.addRow("Local Governor Assigned:", self.txt_governor)
+        form.addRow("Taxation Rate Anomaly (%):", self.sp_tax_rate)
+        lay.addLayout(form)
+        lay.addStretch()
+        self.tabs.addTab(ws, "🛡️ Provinces")
+
+    def _assemble_biomes_eco_workspace(self):
+        ws = QWidget()
+        lay = QVBoxLayout(ws)
+        self.cb_biomes_templates = QComboBox()
+        self.cb_biomes_templates.addItems(["Select Biome Template...", "Tropical Savanna", "Taiga / Boreal Forest", "Benthic Shelf", "Desert Wastes"])
+        lay.addWidget(QLabel("<b>Whittaker Classification Structural Bounds</b>"))
+        lay.addWidget(self.cb_biomes_templates)
+        
+        from PyQt6.QtWidgets import QFormLayout
+        form = QFormLayout()
+        self.txt_climate_zone = QLineEdit("Equatorial Low Pressure Band")
+        self.txt_nutrient_vector = QLineEdit("Aetheric Leyline Infused Humus")
+        form.addRow("Climate Latitudinal Zone:", self.txt_climate_zone)
+        form.addRow("Nutrient Translational Vector:", self.txt_nutrient_vector)
+        lay.addLayout(form)
+        lay.addStretch()
+        self.tabs.addTab(ws, "🌿 Biomes Eco")
+
+    def _assemble_elevation_volcanic_workspace(self):
+        ws = QWidget()
+        lay = QVBoxLayout(ws)
+        lay.addWidget(QLabel("<b>Tectonic Plate Properties &amp; Volcanic Stress Vectors</b>"))
+        
+        from PyQt6.QtWidgets import QFormLayout
+        form = QFormLayout()
+        self.txt_alt_range = QLineEdit("0.45 to 0.98 Scalar Floats")
+        self.chk_volcano_active = QCheckBox(); self.chk_volcano_active.setChecked(True)
+        form.addRow("Altitude Range Capacity:", self.txt_alt_range)
+        form.addRow("Volcanic Activity Hotspots:", self.chk_volcano_active)
+        lay.addLayout(form)
+        
+        lay.addWidget(QLabel("<b>Cartography Sculpt Brush Integration</b>"))
+        btn_activate_sculpt = QPushButton("⛰️ Load Tectonic Height Paint Canvas Tools")
+        btn_activate_sculpt.clicked.connect(lambda: self.main_window.cb_brush_mode.setCurrentText("Height Paint") if hasattr(self.main_window, 'cb_brush_mode') else None)
+        lay.addWidget(btn_activate_sculpt)
+        lay.addStretch()
+        self.tabs.addTab(ws, "⛰️ Elevation")
+
+    def _assemble_tech_era_workspace(self):
+        ws = QWidget()
+        lay = QVBoxLayout(ws)
+        self.cb_tech = QComboBox()
+        self.cb_tech.addItems(["Select Tech Era...", "Pre-Shattering Clockwork Lattice", "Aether-Tech Core Century", "Steam Combustion Epoch"])
+        lay.addWidget(QLabel("<b>Technological Era Timeline Framework</b>"))
+        lay.addWidget(self.cb_tech)
+        
+        self.tech_list = QListWidget()
+        self.tech_list.addItems(["Core Inventions: Closed-Loop Aetheric Centrifuge, Jitter-Rig Navigation Array", "Resource Dependencies: Solid Condensed Dragonstone Showers, Voltaic Fleece Fabrics"])
+        lay.addWidget(self.tech_list, 1)
+        self.tabs.addTab(ws, "⚙️ Tech Eras")
+
+
+# =============================================================================
 # MAIN WINDOW
 # =============================================================================
 class WorldsmithMainWindow(QMainWindow):
@@ -628,91 +967,55 @@ class WorldsmithMainWindow(QMainWindow):
         self.project_dir = os.path.abspath(project_dir)
         project_name = os.path.basename(self.project_dir)
         self.setWindowTitle(f"Worldsmith Sandbox - {project_name}")
-        self.resize(1600, 950)
+        self.resize(1650, 950)
         self.setStyleSheet("background: #111116; color: #EEEEF8;")
         self.start_ollama_server()
 
-        # --- Base Data Paths ---
+        # Data paths mapping definitions
         self.db_path = os.path.join(self.project_dir, "lore_forge_world.db")
-        self.ai_worker    = None
+        self.ai_worker = None
         self.audit_worker = None
+        self.driver_worker = None
         self.selected_cell_idx = None
-
         self.template_mgr = TemplateManager(self.db_path)
-        self.emblem_gen   = EmblemGenerator()
-
-        # Calendar settings
+        self.emblem_gen = EmblemGenerator()
+        
         self.custom_year_length = 420
-        self.custom_seasons     = ["Sowing-Time", "High-Sun", "Gold-Leaf", "Deep-Frost"]
-        self.cosmos_engine      = CosmosEngine(self.custom_year_length, self.custom_seasons)
-
-        # Initialize full Azgaar simulation logic including all parameters and layers
+        self.custom_seasons = ["Sowing-Time", "High-Sun", "Gold-Leaf", "Deep-Frost"]
+        self.cosmos_engine = CosmosEngine(self.custom_year_length, self.custom_seasons)
         self.map_engine = AzgaarEngine()
-
-        # Session progress tracking
         self._session_msg_count = 0
 
-        # --- Stylesheet ---
         self._apply_stylesheet()
+        self._build_top_windows_menu() # Setup native top-left menu actions
 
-        # --- Main Splitter (Moved below compatibility widgets) ---
-
-        # --- Hidden Compatibility Widgets ---
-        # These preserve all existing slot method signatures without modification.
-        self.cb_layer = QComboBox(self)
-        self.cb_layer.addItems([
-            "Elevation", "Biomes", "Political States", "Provinces",
-            "Cultures", "Magic Layer", "Production Goods", "Rivers",
-            "Roads", "Military Regiments", "Burgs"
-        ])
-        self.cb_layer.currentTextChanged.connect(self.change_map_layer)
-        self.cb_layer.hide()
-
-        self.chk_layer_visibility = QCheckBox(self)
-        self.chk_layer_visibility.setChecked(True)
-        self.chk_layer_visibility.stateChanged.connect(self.toggle_layer_visibility)
-        self.chk_layer_visibility.hide()
-
+        # --- Compatibility Placeholder Slots (Verbatim Layer Bridges) ---
+        self.cb_layer = QComboBox(self); self.cb_layer.hide()
+        self.chk_layer_visibility = QCheckBox(self); self.chk_layer_visibility.hide()
         self.cb_brush_mode = QComboBox(self)
-        self.cb_brush_mode.addItems([
-            "Inspect", "Magic Paint", "Height Paint", "Height Raise", "Height Lower", "Height Smooth",
-            "State Paint", "Province Paint", "Culture Paint", "Religion Paint", "River Paint", "Burg Paint",
-            "Biome Paint", "Production Paint", "Road Paint", "Road Delete", "Military Paint"
-        ])
+        self.cb_brush_mode.addItems(["Inspect", "Height Paint", "State Paint", "Culture Paint", "Religion Paint", "River Paint", "Burg Paint", "Magic Paint", "Biome Paint", "Production Paint"])
         self.cb_brush_mode.currentTextChanged.connect(self.change_brush_mode)
         self.cb_brush_mode.hide()
+        self.cb_magic_brush = QComboBox(self); self.cb_magic_brush.hide()
+        self.cb_edit_element = QComboBox(self); self.cb_edit_element.hide()
+        self.cb_tools = QComboBox(self); self.cb_tools.hide()
+        
+        self.brush_settings_panel = BrushSettingsWidget(self, self)
+        self.brush_settings_panel.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
+        self.brush_settings_panel.hide()
 
-        self.cb_magic_brush = QComboBox(self)
-        self.cb_magic_brush.addItems(["Wild Magic", "Abyssal Corruption", "Ley Line Node", "Aether Storm", "None"])
-        self.cb_magic_brush.currentTextChanged.connect(self.change_magic_brush)
-        self.cb_magic_brush.hide()
-
-        self.cb_edit_element = QComboBox(self)
-        self.cb_edit_element.addItems(["Edit Element...", "States Table", "Cultures Table", "Religions Table", "Burgs Table"])
-        self.cb_edit_element.currentTextChanged.connect(self.open_element_table_editor)
-        self.cb_edit_element.hide()
-
-        self.cb_tools = QComboBox(self)
-        self.cb_tools.addItems([
-            "Tools", "Edit State", "Edit Culture", "Edit Religion",
-            "Add Burg", "Delete Selected Element", "Export Master Packages"
-        ])
-        self.cb_tools.currentTextChanged.connect(self.trigger_azgaar_tool_mode)
-        self.cb_tools.hide()
-
-        # Master horizontal layout to hold the file browser and the main flanking panel area
+        # --- Modular Workspace Tree Assembly ---
         self.master_layout = QHBoxLayout()
         self.master_layout.setContentsMargins(0, 0, 0, 0)
         self.master_layout.setSpacing(0)
         
-        # 1. Collapsible File Browser Container
+        # Collapsible File Browser Margin
         self.file_browser_sidebar = QWidget()
         self.file_browser_sidebar.setObjectName("FileTreePanel")
         self.file_browser_sidebar.setFixedWidth(220)
         fb_layout = QVBoxLayout(self.file_browser_sidebar)
         fb_layout.setContentsMargins(6, 6, 6, 6)
         
-        # Wire up your existing file system tree model
         self.file_model = QFileSystemModel()
         lore_dir = self.get_lore_dir()
         if not os.path.exists(lore_dir): os.makedirs(lore_dir)
@@ -731,77 +1034,120 @@ class WorldsmithMainWindow(QMainWindow):
         fb_layout.addWidget(self.file_tree)
         self.master_layout.addWidget(self.file_browser_sidebar)
 
-        # 2. Main Central Workspace Splitter (Left Bay | Center Notebook | Right Bay)
+        # Main Splitter core
         self.workspace_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.workspace_splitter.setStyleSheet("QSplitter::handle { background: #29292E; width: 3px; }")
         self.master_layout.addWidget(self.workspace_splitter, 1)
 
-        # Instantiate all your core functional widgets so they can be referenced interchangeably
         self._init_modular_tool_pool()
 
-        # Build Left Flanking Tool Bay Slot
+        # PANEL 1: LEFT VIEWPORT BAY (Determines Active Focus Workspace)
         self.left_tool_bay = QWidget()
         self.left_tool_bay_layout = QVBoxLayout(self.left_tool_bay)
         self.left_tool_bay_layout.setContentsMargins(4, 4, 4, 4)
+
         self.left_picker = QComboBox()
-        self.left_picker.addItems(["Hide Tool", "Interactive Map", "AI Workflow Terminal", "Timeline & Cosmology", "Data Tables Manager", "Render & Export Setup"])
-        self.left_picker.currentTextChanged.connect(lambda text: self._swap_modular_tool("left", text))
+        self.left_picker.addItems([
+            "Interactive Map Canvas",
+            "Timeline & Celestial Orbit",
+            "Template Section Records"
+        ])
+        self.left_picker.currentTextChanged.connect(self.handle_left_bay_workspace_switch)
+
         self.left_tool_container = QWidget()
         self.left_tool_container_layout = QVBoxLayout(self.left_tool_container)
         self.left_tool_container_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.left_tool_bay_layout.addWidget(QLabel("<b>Left: Select Workspace Target</b>"))
         self.left_tool_bay_layout.addWidget(self.left_picker)
         self.left_tool_bay_layout.addWidget(self.left_tool_container, 1)
-        
-        # Build Right Flanking Tool Bay Slot
+
+        # PANEL 3: RIGHT REACTIVE TOOL BAY (Contextually Adapts to Left Bay Choice)
         self.right_tool_bay = QWidget()
         self.right_tool_bay_layout = QVBoxLayout(self.right_tool_bay)
         self.right_tool_bay_layout.setContentsMargins(4, 4, 4, 4)
-        self.right_picker = QComboBox()
-        self.right_picker.addItems(["Hide Tool", "Interactive Map", "AI Workflow Terminal", "Timeline & Cosmology", "Data Tables Manager", "Render & Export Setup"])
-        self.right_picker.currentTextChanged.connect(lambda text: self._swap_modular_tool("right", text))
+
         self.right_tool_container = QWidget()
         self.right_tool_container_layout = QVBoxLayout(self.right_tool_container)
         self.right_tool_container_layout.setContentsMargins(0, 0, 0, 0)
-        self.right_tool_bay_layout.addWidget(self.right_picker)
+
+        self.right_tool_bay_layout.addWidget(QLabel("<b>Right: Adaptive Context Controls</b>"))
         self.right_tool_bay_layout.addWidget(self.right_tool_container, 1)
 
-        # Center Writing Frame Container (Stays Fixed in Center)
-        self._build_writing_panel() # Re-uses your existing notebook builder layout function
 
-        # Inject components into the splitter workspace in direct visual sequence order
+        self._build_writing_panel() # Center Notebook Setup
+
         self.workspace_splitter.addWidget(self.left_tool_bay)
-        self.workspace_splitter.addWidget(self.note_container) # Centered Writing Panel
+        self.workspace_splitter.addWidget(self.note_container)
         self.workspace_splitter.addWidget(self.right_tool_bay)
 
-        # Set default slot configurations (Left Slot = Map, Center = Notes, Right Slot = AI)
-        self.left_picker.setCurrentText("Interactive Map")
-        self.right_picker.setCurrentText("AI Workflow Terminal")
+        # Force initial state: Map Canvas left, Azgaar Toolbox right
+        self.left_picker.setCurrentText("Interactive Map Canvas")
+        self.handle_left_bay_workspace_switch("Interactive Map Canvas")
         
-        # Set central layout wrapper widget
         central_widget = QWidget()
         central_widget.setLayout(self.master_layout)
         self.setCentralWidget(central_widget)
 
-        # --- Status Bar ---
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
         self.statusBar.showMessage("Worldsmith ready.")
 
-        # --- Initialize DB, World, and Welcome ---
         self.setup_markers_db()
         self.setup_magic_db()
         self.setup_timeline_db()
         self.setup_staging_db()
 
-        # Timer for global active worldbuilding prompts
         self.active_prompt_timer = QTimer(self)
         self.active_prompt_timer.timeout.connect(self.trigger_global_active_prompt)
-        self.active_prompt_timer.start(120000) # Every 2 minutes
+        self.active_prompt_timer.start(120000)
         
-        # Do not generate world automatically on load. Wait for user input or file load.
         self.load_unresolved_inconsistencies()
         self.refresh_note_list()
         self.trigger_welcome_prompt()
+
+    def _build_top_windows_menu(self):
+        """Assembles a classic native top menu bar matrix for centralized workspace controls."""
+        menu_bar = self.menuBar()
+        menu_bar.setStyleSheet("""
+            QMenuBar { background-color: #16161c; color: #EEEEF8; border-bottom: 1px solid #29292E; }
+            QMenuBar::item:selected { background-color: #29293a; color: #04D361; }
+            QMenu { background-color: #1e1e2c; color: #EEEEF8; border: 1px solid #404060; }
+            QMenu::item:selected { background-color: #29293a; color: #04D361; }
+        """)
+        
+        # File Operations Menu Slot
+        file_menu = menu_bar.addMenu("&File")
+        
+        act_new = file_menu.addAction("🎲 Procedural New World")
+        act_new.triggered.connect(self.trigger_world_regeneration)
+        file_menu.addSeparator()
+        
+        act_load = file_menu.addAction("📂 Load Project Workspace (.db)")
+        act_load.triggered.connect(self.load_world_from_file)
+        
+        act_save = file_menu.addAction("💾 Save Project Workspace (.db)")
+        act_save.triggered.connect(self.save_world_to_file)
+        file_menu.addSeparator()
+        
+        act_exit = file_menu.addAction("🚪 Exit System")
+        act_exit.triggered.connect(self.close)
+
+        # Ingestion & Imports Menu Slot
+        import_menu = menu_bar.addMenu("&Imports")
+        act_imp_note = import_menu.addAction("📄 Import Single Text/MD Note")
+        act_imp_note.triggered.connect(self.import_external_note)
+        
+        act_imp_fold = import_menu.addAction("📁 Ingest Unstructured Note Folder")
+        act_imp_fold.triggered.connect(self.import_external_folder)
+
+        # Renders & Exports Menu Slot
+        export_menu = menu_bar.addMenu("&Exports")
+        act_exp_gis = export_menu.addAction("🚀 Compile GeoJSON GIS Framework")
+        act_exp_gis.triggered.connect(self.export_master_packages)
+        
+        act_exp_wiki = export_menu.addAction("🌐 Compile Offline Site WebWiki")
+        act_exp_wiki.triggered.connect(self.compile_static_wiki)
 
     def start_ollama_server(self):
         """Silently launch Ollama serve in the background if not already running."""
@@ -827,51 +1173,75 @@ class WorldsmithMainWindow(QMainWindow):
         except Exception as e:
             print(f"Failed to auto-launch Ollama: {e}")
 
-    # =========================================================================
-    # STYLESHEET
-    # =========================================================================
     def _init_modular_tool_pool(self):
-        """Pre-instantiates all interface tools inside isolated memory frames so they can be swapped dynamically."""
-        # A. Map Viewer Module Frame
-        self.map_tool_frame = QWidget()
-        mt_layout = QVBoxLayout(self.map_tool_frame)
-        mt_layout.setContentsMargins(0, 0, 0, 0)
-        # Re-uses your specialized map viewport container panel setup
+        """Pre-instantiates and registers all sub-components into unified memory frames."""
+
+        # A. Interactive Map Canvas — LEFT viewport frame
+        self.map_viewer_frame = QWidget()
+        mv_layout = QVBoxLayout(self.map_viewer_frame)
+        mv_layout.setContentsMargins(0, 0, 0, 0)
         self.map_viewer = MapViewerWidget(self)
         self.map_viewer.cell_hovered.connect(self.handle_cell_hovered)
         self.map_viewer.cell_clicked.connect(self.handle_cell_clicked)
-        mt_layout.addWidget(self.map_viewer)
+        mv_layout.addWidget(self.map_viewer)
 
-        # B. AI Assistant Module Frame
-        self.ai_tool_frame = QWidget()
-        # Isolates your existing _build_ai_panel components into this tool frame child container
-        self._assemble_modular_ai_panel(self.ai_tool_frame)
-
-        # C. Timeline & Cosmology Module Frame
-        self.timeline_tool_frame = QWidget()
-        tl_layout = QVBoxLayout(self.timeline_tool_frame)
-        self.lbl_timeline = QLabel("<b>Historical Timeline</b>")
-        self.timeline_slider = QSlider(Qt.Orientation.Horizontal)
-        self.timeline_slider.setRange(1, 1000 * 420)
-        self.timeline_slider.valueChanged.connect(self.handle_timeline_changed)
+        # B. Timeline & Celestial Orbit — LEFT preview frame
+        self.timeline_left_frame = QWidget()
+        tll_layout = QVBoxLayout(self.timeline_left_frame)
+        tll_layout.setContentsMargins(8, 8, 8, 8)
         from python_fmg.renderers.celestial_widget import CelestialPreviewWidget
         self.celestial_widget = CelestialPreviewWidget(self)
-        tl_layout.addWidget(self.lbl_timeline)
-        tl_layout.addWidget(self.timeline_slider)
-        tl_layout.addWidget(self.celestial_widget)
-        tl_layout.addStretch()
+        self.celestial_widget.setFixedHeight(220)
+        tll_layout.addWidget(QLabel("<b>Active Celestial Orbit Vector Space</b>"))
+        tll_layout.addWidget(self.celestial_widget)
+        tll_layout.addStretch()
 
-        # D. Section Entities Table Manager Module Frame
-        self.tables_tool_frame = QWidget()
-        tb_layout = QVBoxLayout(self.tables_tool_frame)
-        self.cb_quick_table = QComboBox()
-        self.cb_quick_table.addItems(["Select Table...", "States Table", "Cultures Table", "Religions Table", "Burgs Table"])
-        self.cb_quick_table.currentTextChanged.connect(self.open_element_table_editor)
-        tb_layout.addWidget(QLabel("<b>Dossier &amp; Registry Manager</b>"))
-        tb_layout.addWidget(self.cb_quick_table)
-        tb_layout.addStretch()
+        # C. Template Section Records — LEFT staging selector frame
+        self.template_left_frame = QWidget()
+        tpl_layout = QVBoxLayout(self.template_left_frame)
+        tpl_layout.setContentsMargins(8, 8, 8, 8)
+        self.cb_staging_selector = QComboBox()
+        self.cb_staging_selector.addItems([
+            "Focus: Characters dossier",
+            "Focus: Locations directory",
+            "Focus: Factions matrix",
+            "Focus: Cultures registry"
+        ])
+        self.cb_staging_selector.currentTextChanged.connect(self._sync_right_bay_template_controls)
+        tpl_layout.addWidget(QLabel("<b>Template Dossier Focus Target:</b>"))
+        tpl_layout.addWidget(self.cb_staging_selector)
+        tpl_layout.addStretch()
 
-        # E. Final Render & Export Setup Module Frame
+        # D. Azgaar Cartography Toolbox — RIGHT reactive panel (Map Canvas mode)
+        self.azgaar_toolbox_right = AzgaarMapToolboxWidget(self)
+        # Keep legacy alias so _swap_modular_tool still works if called directly
+        self.azgaar_toolbox_frame = self.azgaar_toolbox_right
+
+        # E. AI Workflow Terminal — RIGHT reactive panel
+        self.ai_tool_frame = QWidget()
+        self._assemble_modular_ai_panel(self.ai_tool_frame)
+        self.ai_terminal_right = self.ai_tool_frame
+
+        # F. Timeline Slider Controls — RIGHT reactive panel (Timeline mode)
+        #    Uses timeline_slider_pool to avoid overwriting the notes-panel self.timeline_slider
+        self.timeline_slider_right = QWidget()
+        tlr_layout = QVBoxLayout(self.timeline_slider_right)
+        tlr_layout.setContentsMargins(8, 8, 8, 8)
+        self.lbl_timeline_pool = QLabel("<b>Historical Timeline Controls</b>")
+        self.timeline_slider_pool = QSlider(Qt.Orientation.Horizontal)
+        self.timeline_slider_pool.setRange(1, 1000 * 420)
+        self.timeline_slider_pool.valueChanged.connect(self.handle_timeline_changed)
+        btn_snap_pool = QPushButton("📸 Save Map Snapshot State")
+        btn_snap_pool.clicked.connect(self.save_map_snapshot)
+        tlr_layout.addWidget(self.lbl_timeline_pool)
+        tlr_layout.addWidget(self.timeline_slider_pool)
+        tlr_layout.addWidget(btn_snap_pool)
+        tlr_layout.addStretch()
+
+        # G. Template Workspace Suite — RIGHT reactive panel (Template mode)
+        self.template_suite_right = TemplateWorkspaceSuite(self)
+
+        # H. Render & Export frame (kept for _swap_modular_tool compatibility)
         self.export_tool_frame = QWidget()
         ex_layout = QVBoxLayout(self.export_tool_frame)
         btn_run_export = QPushButton("🚀 Generate Master Packages")
@@ -884,26 +1254,24 @@ class WorldsmithMainWindow(QMainWindow):
         ex_layout.addStretch()
 
     def _swap_modular_tool(self, slot_side, tool_text):
-        """Dynamically clears the target docking bay and reparents the selected component."""
-        # Map choice strings directly to frame memory locations
+        """Dynamically clears the target docking bay and reparents the selected component.
+        Kept for legacy/menu-triggered compatibility. Primary routing is via handle_left_bay_workspace_switch."""
         tool_mapping = {
-            "Interactive Map": self.map_tool_frame,
-            "AI Workflow Terminal": self.ai_tool_frame,
-            "Timeline & Cosmology": self.timeline_tool_frame,
-            "Data Tables Manager": self.tables_tool_frame,
-            "Render & Export Setup": self.export_tool_frame
+            "Interactive Map Canvas": self.map_viewer_frame,
+            "Interactive Map":        self.map_viewer_frame,
+            "Azgaar Map Toolbox":     self.azgaar_toolbox_right,
+            "AI Workflow Terminal":   self.ai_tool_frame,
+            "Timeline & Cosmology":   self.timeline_slider_right,
+            "Render & Export Setup":  self.export_tool_frame
         }
-        
-        target_container = self.left_tool_container if slot_side == "left" else self.right_tool_container
+
         target_layout = self.left_tool_container_layout if slot_side == "left" else self.right_tool_container_layout
         target_bay = self.left_tool_bay if slot_side == "left" else self.right_tool_bay
 
-        # Clear out current child component without destroying it
         while target_layout.count():
             item = target_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.setParent(None)
+            w = item.widget()
+            if w: w.setParent(None)
 
         if tool_text == "Hide Tool":
             target_bay.setVisible(False)
@@ -913,9 +1281,77 @@ class WorldsmithMainWindow(QMainWindow):
             if selected_widget:
                 target_layout.addWidget(selected_widget)
                 selected_widget.show()
-                
-        # Instantly recalculate window boundaries smoothly
-        # self.workspace_splitter.refresh()
+
+        self.workspace_splitter.refresh()
+
+    def handle_left_bay_workspace_switch(self, target_workspace_text):
+        """
+        Reactive Routing Core.
+        When the left workspace selector changes, it reparents matching toolsets
+        into both bays simultaneously and updates the environment state.
+        """
+        # Clear left bay safely without dropping references
+        left_layout = self.left_tool_container_layout
+        while left_layout.count():
+            item = left_layout.takeAt(0)
+            w = item.widget()
+            if w: w.setParent(None)
+
+        # Clear right bay safely
+        right_layout = self.right_tool_container_layout
+        while right_layout.count():
+            item = right_layout.takeAt(0)
+            w = item.widget()
+            if w: w.setParent(None)
+
+        if target_workspace_text == "Interactive Map Canvas":
+            left_layout.addWidget(self.map_viewer_frame)
+            self.map_viewer_frame.show()
+            right_layout.addWidget(self.azgaar_toolbox_right)
+            self.azgaar_toolbox_right.show()
+            if hasattr(self, "statusBar"):
+                self.statusBar.showMessage(
+                    "Workspace: Map Canvas | Right: Cartography Brushes"
+                )
+
+        elif target_workspace_text == "Timeline & Celestial Orbit":
+            left_layout.addWidget(self.timeline_left_frame)
+            self.timeline_left_frame.show()
+            right_layout.addWidget(self.timeline_slider_right)
+            self.timeline_slider_right.show()
+            if hasattr(self, "statusBar"):
+                self.statusBar.showMessage(
+                    "Workspace: Celestial Orbits | Right: Timeline Sliders"
+                )
+
+        elif target_workspace_text == "Template Section Records":
+            left_layout.addWidget(self.template_left_frame)
+            self.template_left_frame.show()
+            right_layout.addWidget(self.template_suite_right)
+            self.template_suite_right.show()
+            self._sync_right_bay_template_controls(
+                self.cb_staging_selector.currentText()
+            )
+            if hasattr(self, "statusBar"):
+                self.statusBar.showMessage(
+                    "Workspace: Template Dossiers | Right: Lore Checklist Suite"
+                )
+
+        self.workspace_splitter.refresh()
+
+    def _sync_right_bay_template_controls(self, focus_text):
+        """Forces the right-side multi-tab suite to switch active views matching left-side context choices."""
+        if not hasattr(self, "template_suite_right"): return
+        
+        tab_map = {
+            "Focus: Characters dossier": 0,
+            "Focus: Locations directory": 1,
+            "Focus: Factions matrix": 3,   # Swaps directly to the updated Factions view tab index row
+            "Focus: Cultures registry": 2,  # Swaps to the updated Word Blender tab index row
+        }
+        target_tab_idx = tab_map.get(focus_text, 0)
+        self.template_suite_right.tabs.setCurrentIndex(target_tab_idx)
+
 
     def _apply_stylesheet(self):
         self.setStyleSheet("""
@@ -1061,298 +1497,6 @@ class WorldsmithMainWindow(QMainWindow):
                 margin-top: 10px; padding-top: 10px; font-weight: bold; color: #04D361;
             }
         """)
-
-    # =========================================================================
-    # PANEL BUILDERS
-    # =========================================================================
-    def _build_file_tree_panel(self):
-        """Build Panel 0: File Browser for Lore Notes."""
-        container = QWidget()
-        container.setObjectName("FileTreePanel")
-        container.setStyleSheet("background: #1e1e2c; border: none;")
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
-        
-        lbl = QLabel("Lore Directory")
-        lbl.setStyleSheet("color: #D8D8EC; font-weight: bold; font-size: 13px; padding: 4px;")
-        
-        self.file_model = QFileSystemModel()
-        lore_dir = self.get_lore_dir()
-        if not os.path.exists(lore_dir):
-            os.makedirs(lore_dir)
-        self.file_model.setRootPath(lore_dir)
-        
-        self.file_tree = QTreeView()
-        self.file_tree.setModel(self.file_model)
-        self.file_tree.setRootIndex(self.file_model.index(lore_dir))
-        self.file_tree.setAnimated(True)
-        self.file_tree.setIndentation(15)
-        self.file_tree.setSortingEnabled(True)
-        
-        # Hide standard columns like size, type, date modified
-        self.file_tree.setColumnHidden(1, True)
-        self.file_tree.setColumnHidden(2, True)
-        self.file_tree.setColumnHidden(3, True)
-        self.file_tree.setHeaderHidden(True)
-        self.file_tree.setStyleSheet("QTreeView { color: #E0E0E0; background: #111116; border: 1px solid #404060; border-radius: 4px; }")
-        
-        self.file_tree.clicked.connect(self.on_file_tree_clicked)
-        
-        layout.addWidget(lbl)
-        layout.addWidget(self.file_tree)
-        
-        self.main_splitter.addWidget(container)
-
-    def _build_map_panel(self):
-        """Build Panel 1: Map View & Editor with icon sidebar, layer list, floating tools."""
-
-        map_outer = QWidget()
-        map_outer.setObjectName("MapOuter")
-        outer_layout = QHBoxLayout(map_outer)
-        outer_layout.setContentsMargins(0, 0, 0, 0)
-        outer_layout.setSpacing(0)
-
-        # --- Icon Sidebar (~50px) ---
-        icon_sidebar = QWidget()
-        icon_sidebar.setObjectName("IconSidebar")
-        icon_sidebar.setFixedWidth(50)
-        sb_layout = QVBoxLayout(icon_sidebar)
-        sb_layout.setContentsMargins(4, 8, 4, 8)
-        sb_layout.setSpacing(4)
-
-        def _sb_btn(icon, tip, checkable=False):
-            b = QToolButton()
-            b.setText(icon)
-            b.setToolTip(tip)
-            b.setFixedSize(40, 36)
-            b.setObjectName("SidebarBtn")
-            b.setCheckable(checkable)
-            return b
-
-        def _hsep():
-            s = QFrame()
-            s.setFrameShape(QFrame.Shape.HLine)
-            s.setStyleSheet("background: #29292E; max-height: 1px; margin: 2px 4px;")
-            return s
-
-        sb_layout.addWidget(_sb_btn("M", "Map View"))
-        sb_layout.addWidget(_hsep())
-
-        btn_toggle_layers = _sb_btn("=", "Toggle Layer Panel")
-        sb_layout.addWidget(btn_toggle_layers)
-
-        btn_toggle_tools = _sb_btn("T", "Show / Hide Layer Tools")
-        sb_layout.addWidget(btn_toggle_tools)
-
-        sb_layout.addWidget(_hsep())
-
-        # Brush mode quick-select buttons
-        self._sidebar_brush_btns = []
-        brush_defs = [
-            ("?", "Inspect"),
-            ("*", "Magic Paint"),
-            ("^", "Height Paint"),
-            ("F", "State Paint"),
-            ("C", "Culture Paint"),
-            ("~", "River Paint"),
-            ("B", "Burg Paint"),
-        ]
-        for icon, name in brush_defs:
-            btn = _sb_btn(icon, name, checkable=True)
-            btn.clicked.connect(lambda _, bn=name: self.cb_brush_mode.setCurrentText(bn))
-            sb_layout.addWidget(btn)
-            self._sidebar_brush_btns.append((btn, name))
-
-        sb_layout.addStretch()
-        sb_layout.addWidget(_hsep())
-
-        # Bottom world action buttons
-        self.btn_regen         = _sb_btn("D", "New World")
-        self.btn_load_world    = _sb_btn("L", "Load World")
-        self.btn_save_world_file = _sb_btn("S", "Save World")
-        btn_elements           = _sb_btn("E", "Edit Elements")
-
-        self.btn_regen.clicked.connect(self.trigger_world_regeneration)
-        self.btn_load_world.clicked.connect(self.load_world_from_file)
-        self.btn_save_world_file.clicked.connect(self.save_world_to_file)
-        btn_elements.clicked.connect(lambda: self.cb_edit_element.setCurrentText("States Table"))
-
-        sb_layout.addWidget(self.btn_regen)
-        sb_layout.addWidget(self.btn_load_world)
-        sb_layout.addWidget(self.btn_save_world_file)
-        sb_layout.addWidget(btn_elements)
-
-        outer_layout.addWidget(icon_sidebar)
-
-        # --- Layer Panel (~178px collapsible) ---
-        self.layer_panel = QWidget()
-        self.layer_panel.setObjectName("LayerPanel")
-        self.layer_panel.setFixedWidth(178)
-        lp_layout = QVBoxLayout(self.layer_panel)
-        lp_layout.setContentsMargins(0, 0, 0, 0)
-        lp_layout.setSpacing(0)
-
-        lp_hdr = QWidget()
-        lp_hdr.setObjectName("LayerPanelHeader")
-        lp_hdr.setFixedHeight(38)
-        lp_hdr_l = QHBoxLayout(lp_hdr)
-        lp_hdr_l.setContentsMargins(10, 0, 8, 0)
-        lp_title = QLabel("Layers")
-        lp_title.setStyleSheet("font-weight: bold; font-size: 13px; color: #04D361; letter-spacing: 1px;")
-        lp_hdr_l.addWidget(lp_title)
-        lp_hdr_l.addStretch()
-        lp_layout.addWidget(lp_hdr)
-
-        div1 = QFrame()
-        div1.setFrameShape(QFrame.Shape.HLine)
-        div1.setStyleSheet("background: #29292E; max-height: 1px;")
-        lp_layout.addWidget(div1)
-
-        LAYERS = [
-            ("Elevation",        "E"),
-            ("Biomes",           "B"),
-            ("Political States", "P"),
-            ("Provinces",        "V"),
-            ("Cultures",         "C"),
-            ("Religions",        "R"),
-            ("Magic Layer",      "*"),
-            ("Production Goods", "G"),
-            ("Rivers",           "~"),
-            ("Roads",            "-"),
-            ("Military Regiments", "X"),
-            ("Burgs",            "H"),
-            ("Temperature",      "T"),
-            ("Precipitation",    "R"),
-            ("Population Density", "D"),
-            ("Ice",              "I"),
-            ("Coastlines",       "~"),
-            ("Borders",          "|"),
-            ("Relief Icons",     "^"),
-            ("Markers",          "!"),
-            ("Emblems",          "&"),
-            ("Grid",             "#"),
-            ("Coordinates",      "°"),
-            ("Compass",          "O"),
-            ("Scale Bar",        "_"),
-            ("Underworld & Crime", "🏴☠️"),
-            ("Sky Layer 1 (1-2km)", "🌌"),
-            ("Sky Layer 2 (3-4km)", "🌌"),
-            ("Subterranean (0-20ft)", "⛏️"),
-            ("Subterranean (20-40ft)", "⛏️"),
-            ("Vignette",         "V"),
-        ]
-
-        self._layer_row_widgets = {}
-
-        for layer_key, icon in LAYERS:
-            row = QWidget()
-            row.setObjectName("LayerRow")
-            row.setFixedHeight(36)
-            row.setCursor(Qt.CursorShape.PointingHandCursor)
-            row_l = QHBoxLayout(row)
-            row_l.setContentsMargins(10, 0, 8, 0)
-            row_l.setSpacing(6)
-
-            icon_lbl = QLabel(icon)
-            icon_lbl.setFixedWidth(18)
-            icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            icon_lbl.setStyleSheet("background: transparent; color: #606080; font-weight: bold;")
-
-            name_lbl = QLabel(layer_key)
-            name_lbl.setStyleSheet("font-size: 12px; color: #A0A0C0; background: transparent;")
-
-            eye_btn = QToolButton()
-            eye_btn.setText("👁")
-            eye_btn.setToolTip("Toggle Visibility")
-            eye_btn.setCheckable(True)
-            eye_btn.setChecked(True)
-            eye_btn.setFixedSize(22, 22)
-            eye_btn.setObjectName("EyeBtn")
-            eye_btn.toggled.connect(lambda checked, lk=layer_key: self._set_layer_visibility(lk, checked))
-
-            gear_btn = QToolButton()
-            gear_btn.setText("⚙")
-            gear_btn.setToolTip("Edit Tool")
-            gear_btn.setFixedSize(22, 22)
-            gear_btn.setStyleSheet("QToolButton { background: transparent; border: none; color: #707080; } QToolButton:hover { color: #04D361; }")
-            gear_btn.clicked.connect(lambda _, lk=layer_key: self._open_layer_editor(lk))
-
-            row_l.addWidget(icon_lbl)
-            row_l.addWidget(name_lbl, 1)
-            row_l.addWidget(eye_btn)
-            row_l.addWidget(gear_btn)
-
-            # Left click row to select layer mode
-            row.mousePressEvent = lambda ev, lk=layer_key: self._select_layer_row(lk)
-            self._layer_row_widgets[layer_key] = row
-            lp_layout.addWidget(row)
-
-        lp_layout.addStretch()
-
-        div2 = QFrame()
-        div2.setFrameShape(QFrame.Shape.HLine)
-        div2.setStyleSheet("background: #29292E; max-height: 1px;")
-        lp_layout.addWidget(div2)
-
-        btn_add_layer = QPushButton("+  Add Layer")
-        btn_add_layer.setObjectName("AddLayerBtn")
-        btn_add_layer.setFixedHeight(32)
-        lp_layout.addWidget(btn_add_layer)
-
-        # Add Brush Settings Panel
-        self.brush_settings_panel = BrushSettingsWidget(self)
-        self.brush_settings_panel.hide()
-        lp_layout.addWidget(self.brush_settings_panel)
-
-        # Add Brush Size Slider
-        brush_widget = QWidget()
-        brush_l = QVBoxLayout(brush_widget)
-        brush_l.setContentsMargins(10, 10, 10, 10)
-        self.lbl_brush_size = QLabel("<b>Brush Radius:</b>")
-        self.lbl_brush_size.setStyleSheet("color: #A0A0C0; font-size: 11px;")
-        self.slider_brush_size = QSlider(Qt.Orientation.Horizontal)
-        self.slider_brush_size.setRange(1, 4)
-        self.slider_brush_size.setValue(1)
-        self.slider_brush_size.valueChanged.connect(self.change_brush_size)
-        brush_l.addWidget(self.lbl_brush_size)
-        brush_l.addWidget(self.slider_brush_size)
-        lp_layout.addWidget(brush_widget)
-
-        btn_toggle_layers.clicked.connect(
-            lambda: self.layer_panel.setVisible(not self.layer_panel.isVisible())
-        )
-
-        outer_layout.addWidget(self.layer_panel)
-
-        # --- Map Canvas Area ---
-        self.map_area = QWidget()
-        self.map_area.setObjectName("MapArea")
-        map_area_l = QVBoxLayout(self.map_area)
-        map_area_l.setContentsMargins(0, 0, 0, 0)
-        map_area_l.setSpacing(0)
-
-        self.map_viewer = MapViewerWidget(self)
-        self.map_viewer.cell_hovered.connect(self.handle_cell_hovered)
-        self.map_viewer.cell_clicked.connect(self.handle_cell_clicked)
-        map_area_l.addWidget(self.map_viewer)
-
-        outer_layout.addWidget(self.map_area, 1)
-
-        # --- Floating Layer Tools (child of map_area, overlaid) ---
-        self.floating_layer_tools = FloatingLayerTools(self.map_area)
-        self.floating_layer_tools.hide()
-
-        self.floating_layer_tools.magic_combo.currentTextChanged.connect(self.change_magic_brush)
-
-        btn_toggle_tools.clicked.connect(
-            lambda: self.floating_layer_tools.setVisible(not self.floating_layer_tools.isVisible())
-        )
-
-        # Default active layer
-        self._select_layer_row("Biomes")
-
-        pass # Replaced by workspace_splitter in main layout
 
     def _build_writing_panel(self):
         """Build Panel 2: Writing & Viewing Workspace with formatting toolbar."""
@@ -2039,6 +2183,8 @@ class WorldsmithMainWindow(QMainWindow):
             self.load_map_data_to_viewer()
             self.statusBar.showMessage("World regeneration committed successfully.")
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             QMessageBox.critical(self, "Pipeline Failure", f"Failed generation sequence: {e}")
 
     def load_unresolved_inconsistencies(self):
@@ -2222,14 +2368,27 @@ class WorldsmithMainWindow(QMainWindow):
     def handle_ingestion_complete(self):
         self.statusBar.showMessage("AI Ingestion Complete!")
         self.populate_file_tree()
-        self.ai_prompt_history.append(
-            f'<div style="text-align: left; margin: 2px 30px 6px 4px;">'
-            f'<span style="display: inline-block; background: #1a1a2c; color: #D8D8EC; '
-            f'border-radius: 14px 14px 14px 2px; padding: 7px 13px; font-size: 12px; '
-            f'border-left: 3px solid #04D361;">'
-            f'<span style="color: #04D361; font-weight: bold;">A</span> [System] I have successfully categorized and ingested the recent files. Check the file browser to see them organized.'
-            f'</span></div>'
-        )
+
+        # Guard: ai_prompt_history only exists when AI panel is active in the current bay
+        if hasattr(self, "ai_prompt_history"):
+            self.ai_prompt_history.append(
+                f'<div style="text-align: left; margin: 2px 30px 6px 4px;">'
+                f'<span style="display: inline-block; background: #1a1a2c; color: #D8D8EC; '
+                f'border-radius: 14px 14px 14px 2px; padding: 7px 13px; font-size: 12px; '
+                f'border-left: 3px solid #04D361;">'
+                f'<span style="color: #04D361; font-weight: bold;">A</span> [System] I have successfully categorized and ingested the recent files. Check the file browser to see them organized.'
+                f'</span></div>'
+            )
+        else:
+            self.statusBar.showMessage(
+                "AI Ingestion Complete! Note caches synced. (Switch to AI workspace to view log.)"
+            )
+
+        # Guard: lbl_session_progress only present when AI panel is loaded and visible
+        if not hasattr(self, "lbl_session_progress"):
+            self.statusBar.showMessage("AI Ingestion Complete! Note caches synced completely.")
+            return
+
         self._update_session_progress()
         
         self.process_spatial_seeding_from_imported_text()
@@ -2768,6 +2927,13 @@ class WorldsmithMainWindow(QMainWindow):
 
     def refresh_note_list(self):
         pass
+
+    def populate_file_tree(self):
+        """Forces the file browser tree to refresh."""
+        if hasattr(self, "file_model"):
+            lore_dir = self.get_lore_dir()
+            if os.path.exists(lore_dir):
+                self.file_model.setRootPath(lore_dir)
 
     def on_file_tree_clicked(self, index):
         file_path = self.file_model.filePath(index)

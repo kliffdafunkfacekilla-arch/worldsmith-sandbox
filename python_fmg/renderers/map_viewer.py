@@ -68,24 +68,60 @@ class MapViewerWidget(QWidget):
         self.pan_offset = QPointF(0, 0)
         self.last_pan_pos = None
 
-        # Sprite sheet assets loader
-        self.tile_pixmap = None
-        self.sprite_pixmap = None
-        
-        # We need to find the files in the workspace directory.
-        # This resolves to c:/Users/krazy/Desktop/worldsmith-sandbox
+        # Per-biome aerial texture tile loader.
+        # Each biome key maps to a list of candidate filenames from the assets folder.
+        # Multiple candidates allow per-cell random variation for a natural look.
         workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        tilemap_path = os.path.join(workspace_dir, "assets", "fantasyhextiles_v3_borderless.png")
-        sprites_path = os.path.join(workspace_dir, "assets", "d4np5o7-d68e778b-415c-4b59-90c5-c61c55f015e7.png")
-        
-        if not os.path.exists(tilemap_path) or not os.path.exists(sprites_path):
-            print(f"WARNING: Missing tilemap/sprites in {os.path.join(workspace_dir, 'assets')}!")
-            # We'll use a delayed popup after window shows to ensure it renders correctly
-            self._missing_assets = True
-        else:
-            self._missing_assets = False
-            self.tile_pixmap = QPixmap(tilemap_path)
-            self.sprite_pixmap = QPixmap(sprites_path)
+        assets_dir = os.path.join(workspace_dir, "assets")
+
+        BIOME_TILE_CANDIDATES = {
+            # Lush grass / open meadow
+            "Grassland":             ["001", "002", "003", "004"],
+            "Savanna":               ["001", "002", "003"],
+            # Tropical / dense jungle canopy
+            "Tropical Rainforest":   ["005", "006", "007", "008"],
+            "Kelp Meadows (Grassland)": ["015", "016", "017"],
+            # Shallow teal coast / coral
+            "Coral Forest (Rainforest)": ["010", "011", "012"],
+            "Benthic Shelf (Savanna)": ["020", "021", "022"],
+            # Mixed highland forest
+            "Forest":                ["028", "029", "030", "031"],
+            "Taiga":                 ["050", "051", "052", "053"],
+            # Glacier / ice / frozen tundra
+            "Tundra":                ["037", "038", "039", "040"],
+            "Montane / Glacier":     ["040", "041", "042", "043"],
+            # Rocky mountain / stone
+            "Mountain":              ["058", "059", "060", "061"],
+            # Hot desert (sandy / arid)
+            "Hot Desert":            ["082", "083", "084", "085"],
+            # Swamp / wetland (dark forest with water)
+            "Wetland":               ["055", "056", "057"],
+            # Open ocean deep
+            "Marine":                ["098", "099", "100", "101"],
+            # Abyssal deep / volcanic
+            "Abyssal Trench (Desert)": ["067", "068", "069", "070"],
+        }
+
+        self.biome_tile_pixmaps = {}  # biome_key -> list of QPixmap
+        self._missing_assets = False
+
+        for biome_key, file_ids in BIOME_TILE_CANDIDATES.items():
+            loaded = []
+            for fid in file_ids:
+                path = os.path.join(assets_dir, f"Copilot_20260702_033339_{fid}.png")
+                if os.path.exists(path):
+                    px = QPixmap(path)
+                    if not px.isNull():
+                        loaded.append(px)
+            if loaded:
+                self.biome_tile_pixmaps[biome_key] = loaded
+            else:
+                print(f"WARNING: No tile textures loaded for biome '{biome_key}'")
+                self._missing_assets = True
+
+        # Keep sprite pixmap for any future icon overlays
+        sprites_path = os.path.join(assets_dir, "d4np5o7-d68e778b-415c-4b59-90c5-c61c55f015e7.png")
+        self.sprite_pixmap = QPixmap(sprites_path) if os.path.exists(sprites_path) else None
 
     def screen_to_world(self, pos):
         return QPointF(
@@ -466,29 +502,34 @@ class MapViewerWidget(QWidget):
             painter.fillPath(path, QBrush(color))
             painter.strokePath(path, QPen(QColor("#1e293b"), 0.5))
 
-            # Texture-tile overlay mapping if sheet is available
-            if self.tile_pixmap and self.layer_mode == "Biomes" and self.visibility_map["Biomes"]:
+            # Aerial texture fill: paint biome-matched photo tile clipped to the Voronoi cell shape.
+            if self.biome_tile_pixmaps and self.layer_mode == "Biomes" and self.visibility_map["Biomes"]:
                 biome = self.biomes_data.get(cell_id, "Marine")
-                # Source slice based on biome type (Hex sheet layout coordinates)
-                # Map coordinates matching the 1024x1024 input sheet
-                src_x = 0
-                src_y = 0
-                if "Forest" in biome or "Rainforest" in biome:
-                    src_x, src_y = 200, 0
-                elif "Desert" in biome:
-                    src_x, src_y = 512, 200
-                elif "Glacier" in biome or "Taiga" in biome:
-                    src_x, src_y = 0, 0
-                elif "Marine" in biome or "Trench" in biome:
-                    src_x, src_y = 700, 700
-                else:
-                    src_x, src_y = 200, 512
-                
-                painter.drawPixmap(
-                    QRect(int(cell["x"] - 20), int(cell["y"] - 20), 40, 40),
-                    self.tile_pixmap,
-                    QRect(src_x, src_y, 102, 102)
-                )
+
+                # Resolve closest matching biome key
+                tile_key = biome
+                if tile_key not in self.biome_tile_pixmaps:
+                    # Fuzzy fallback: check substring matches
+                    for key in self.biome_tile_pixmaps:
+                        if any(word in biome for word in key.split()) or any(word in key for word in biome.split()):
+                            tile_key = key
+                            break
+                    else:
+                        tile_key = "Marine"  # ultimate fallback
+
+                candidates = self.biome_tile_pixmaps.get(tile_key)
+                if candidates:
+                    # Stable per-cell random selection for visual variety without flickering
+                    px = candidates[cell_id % len(candidates)]
+
+                    # Clip the texture to the exact Voronoi cell polygon, then paint
+                    painter.save()
+                    painter.setClipPath(path)
+                    # Compute cell bounding box for texture placement
+                    bx = int(cell["x"]) - 32
+                    by = int(cell["y"]) - 32
+                    painter.drawPixmap(QRect(bx, by, 64, 64), px)
+                    painter.restore()
 
         if self.visibility_map["Rivers"]:
             for cell in cells:
