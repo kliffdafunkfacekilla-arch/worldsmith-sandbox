@@ -959,6 +959,52 @@ class AzgaarEngine:
             )
         """)
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cells (
+                id INTEGER PRIMARY KEY,
+                centroid_x REAL,
+                centroid_y REAL,
+                elevation REAL DEFAULT 0.0,
+                moisture REAL DEFAULT 0.0,
+                temperature REAL DEFAULT 0.0,
+                biome TEXT,
+                state_id INTEGER,
+                province_id INTEGER,
+                religion_id INTEGER,
+                culture_id INTEGER,
+                river_id INTEGER DEFAULT 0,
+                flow_accumulation REAL DEFAULT 0.0
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cell_neighbors (
+                cell_id INTEGER,
+                neighbor_id INTEGER,
+                PRIMARY KEY (cell_id, neighbor_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS factions (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                color TEXT,
+                treasury REAL,
+                tech_level INTEGER
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS settlements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                q INTEGER,
+                r INTEGER,
+                population INTEGER,
+                faction_id INTEGER,
+                FOREIGN KEY(faction_id) REFERENCES factions(id)
+            )
+        """)
+
+
         try:
             cursor.execute("DELETE FROM magic_layers")
             cursor.execute("DELETE FROM cell_neighbors")
