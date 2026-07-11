@@ -2856,7 +2856,7 @@ class WorldsmithMainWindow(QMainWindow):
                 self.pending_driver_subheading = None
                 
                 genre = self.cb_genre.currentText() if hasattr(self, "cb_genre") else "Fantasy"
-                self.driver_worker = AILoreDriverWorker(self.get_lore_dir(), genre=genre)
+                self.driver_worker = AILoreDriverWorker(self.get_lore_dir(), self.db_path, genre=genre)
                 self.driver_worker.prompt_ready.connect(self.handle_driver_prompt)
                 self.driver_worker.start()
                 

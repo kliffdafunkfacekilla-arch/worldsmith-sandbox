@@ -363,16 +363,25 @@ class AILoreIngestor(QThread):
                 categories = list(self.templates.keys())
                 system_prompt = (
                     "You are a strict data ingestion parser for a worldbuilding application.\n"
-                    "The user will provide raw text.\n"
-                    "Step 1: Determine which of the following categories this text best fits into: " + ", ".join(categories) + ".\n"
-                    "Step 2: Format the text using the exact subheadings required by that category. "
-                    "If the text lacks information for a subheading, output EXACTLY the tag '[NEEDS_DETAIL]' under that subheading.\n"
-                    "Output format must be JSON:\n"
-                    "{\"category\": \"CategoryName\", \"content\": \"# Title\\n\\n## Subheading 1\\nContent\\n\\n## Subheading 2\\n[NEEDS_DETAIL]\"}\n"
-                    "Do not output any markdown code blocks outside the JSON. Return only the JSON object."
+                    "The user will provide a long raw text document that contains MULTIPLE distinct topics or chapters.\n"
+                    "Step 1: Slice the text into distinct, separate topics or entities.\n"
+                    "Step 2: For EACH topic, determine which of the following EXACT categories it best fits into: " + ", ".join(f"'{c}'" for c in categories) + ".\n"
+                    "You MUST use EXACTLY one of the strings provided above for the 'category' field.\n"
+                    "Step 3: Format each topic using the exact subheadings required by that category. "
+                    "If the topic lacks information for a subheading, output EXACTLY the tag '[NEEDS_DETAIL]' under that subheading.\n"
+                    "Output format must be a JSON ARRAY of objects:\n"
+                    "[\n"
+                    "  {\"title\": \"Safe_Filename_Title\", \"category\": \"ExactCategoryName\", \"content\": \"# Title\\n\\n## Subheading 1\\nContent\\n\\n## Subheading 2\\n[NEEDS_DETAIL]\"},\n"
+                    "  {\"title\": \"Another_Topic\", \"category\": \"ExactCategoryName\", \"content\": \"...\"}\n"
+                    "]\n"
+                    "Do not output any markdown code blocks outside the JSON array. Return only the JSON array."
                 )
                 
                 full_prompt = f"System: {system_prompt}\n\nUser: {content}"
+                
+                import urllib.request
+                import json
+                
                 data = json.dumps({
                     "model": self.model,
                     "prompt": full_prompt,
@@ -387,24 +396,139 @@ class AILoreIngestor(QThread):
                     method="POST"
                 )
                 
-                with urllib.request.urlopen(req, timeout=120) as response:
+                with urllib.request.urlopen(req, timeout=600) as response:
                     resp_data = json.loads(response.read().decode("utf-8"))
-                    result_json = json.loads(resp_data.get("response", "{}"))
+                    raw_response = resp_data.get("response", "[]").strip()
                     
-                    category = result_json.get("category", "Meta")
-                    formatted_content = result_json.get("content", content)
+                    if raw_response.startswith("```json"):
+                        raw_response = raw_response[7:]
+                    if raw_response.startswith("```"):
+                        raw_response = raw_response[3:]
+                    if raw_response.endswith("```"):
+                        raw_response = raw_response[:-3]
+                    raw_response = raw_response.strip()
                     
-                    if category not in categories:
-                        category = "Meta"
+                    try:
+                        extracted_topics = json.loads(raw_response)
+                        if not isinstance(extracted_topics, list):
+                            # In case it returned a single object, wrap it in a list
+                            extracted_topics = [extracted_topics]
+                    except Exception as e:
+                        print(f"JSON parsing failed for {filename}: {e}")
+                        extracted_topics = [{"title": os.path.splitext(filename)[0], "category": "Meta", "content": content}]
+                    
+                    for topic in extracted_topics:
+                        if not isinstance(topic, dict):
+                            continue
                         
-                    # Save to the categorized folder
-                    cat_dir = os.path.join(self.lore_dir, category)
-                    os.makedirs(cat_dir, exist_ok=True)
-                    dest_path = os.path.join(cat_dir, filename)
-                    
-                    with open(dest_path, "w", encoding="utf-8") as out_f:
-                        out_f.write(formatted_content)
+                        raw_title = topic.get("title", "Untitled")
+                        # Sanitize title for filename
+                        safe_title = "".join(c for c in raw_title if c.isalnum() or c in (' ', '_', '-')).strip()
+                        safe_title = safe_title.replace(" ", "_")
+                        if not safe_title:
+                            safe_title = "Untitled"
+                            
+                        category = topic.get("category", "Meta")
+                        formatted_content = topic.get("content", content)
                         
+                        if isinstance(formatted_content, dict) or isinstance(formatted_content, list):
+                            formatted_content = json.dumps(formatted_content, indent=2)
+                        elif not isinstance(formatted_content, str):
+                            formatted_content = str(formatted_content)
+                        
+                        # Fuzzy match category
+                        matched_category = "Meta"
+                        for cat in categories:
+                            if category.lower() in cat.lower() or cat.lower() in category.lower():
+                                matched_category = cat
+                                break
+                        category = matched_category
+                        
+                        # Save to the categorized folder
+                        cat_dir = os.path.join(self.lore_dir, category)
+                        os.makedirs(cat_dir, exist_ok=True)
+                        dest_path = os.path.join(cat_dir, f"{safe_title}.md")
+                        
+                        # Handle duplicate filenames
+                        counter = 1
+                        while os.path.exists(dest_path):
+                            dest_path = os.path.join(cat_dir, f"{safe_title}_{counter}.md")
+                            counter += 1
+                        
+                        with open(dest_path, "w", encoding="utf-8") as out_f:
+                            out_f.write(formatted_content)
+                            
+                        # PHASE 2: Knowledge Base Extraction
+                        kb_prompt = (
+                            "Extract structured relational data from the following text.\n"
+                            "Return a JSON object containing THREE arrays: 'factions', 'settlements', and 'inconsistencies'.\n"
+                            "Factions: {\"name\": string, \"treasury\": float, \"tech_level\": int}\n"
+                            "Settlements: {\"name\": string, \"population\": int, \"faction_name\": string}\n"
+                            "Inconsistencies: {\"description\": string}\n"
+                            "If there are none, return an empty array for that key. ONLY output the JSON object."
+                        )
+                        kb_data = json.dumps({
+                            "model": self.model,
+                            "prompt": f"System: {kb_prompt}\n\nUser: {formatted_content}",
+                            "stream": False,
+                            "format": "json"
+                        }).encode("utf-8")
+                        
+                        try:
+                            kb_req = urllib.request.Request(
+                                "http://localhost:11434/api/generate",
+                                data=kb_data,
+                                headers={"Content-Type": "application/json"},
+                                method="POST"
+                            )
+                            with urllib.request.urlopen(kb_req, timeout=300) as kb_resp:
+                                kb_resp_data = json.loads(kb_resp.read().decode("utf-8"))
+                                kb_raw_response = kb_resp_data.get("response", "{}").strip()
+                                
+                                if kb_raw_response.startswith("```json"):
+                                    kb_raw_response = kb_raw_response[7:]
+                                if kb_raw_response.startswith("```"):
+                                    kb_raw_response = kb_raw_response[3:]
+                                if kb_raw_response.endswith("```"):
+                                    kb_raw_response = kb_raw_response[:-3]
+                                kb_raw_response = kb_raw_response.strip()
+                                
+                                kb_result = json.loads(kb_raw_response)
+                                
+                                import sqlite3
+                                conn = sqlite3.connect(self.db_path)
+                                cursor = conn.cursor()
+                                
+                                # Ensure tables exist
+                                cursor.execute("CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, title TEXT, content TEXT, category TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+                                cursor.execute("CREATE TABLE IF NOT EXISTS factions (id INTEGER PRIMARY KEY, name TEXT, treasury REAL DEFAULT 0.0, tech_level INTEGER DEFAULT 1, color TEXT DEFAULT '#ffffff')")
+                                cursor.execute("CREATE TABLE IF NOT EXISTS settlements (id INTEGER PRIMARY KEY, name TEXT, q INTEGER, r INTEGER, population INTEGER DEFAULT 1000, faction_id INTEGER)")
+                                cursor.execute("CREATE TABLE IF NOT EXISTS inconsistencies (id INTEGER PRIMARY KEY, source_type TEXT, source_id TEXT, description TEXT, status TEXT DEFAULT 'open', detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+                                cursor.execute("INSERT INTO notes (title, content, category) VALUES (?, ?, ?)", (safe_title, formatted_content, category))
+                                
+                                for faction in kb_result.get("factions", []):
+                                    name = faction.get("name", "Unknown")
+                                    if name and name != "Unknown":
+                                        cursor.execute("INSERT INTO factions (name, treasury, tech_level) VALUES (?, ?, ?)", 
+                                            (name, faction.get("treasury", 0.0), faction.get("tech_level", 1)))
+                                
+                                for settlement in kb_result.get("settlements", []):
+                                    name = settlement.get("name", "Unknown")
+                                    if name and name != "Unknown":
+                                        cursor.execute("INSERT INTO settlements (name, population) VALUES (?, ?)", 
+                                            (name, settlement.get("population", 1000)))
+                                
+                                for inc in kb_result.get("inconsistencies", []):
+                                    desc = inc.get("description", "")
+                                    if desc:
+                                        cursor.execute("INSERT INTO inconsistencies (source_type, source_id, description) VALUES (?, ?, ?)", 
+                                            ("note", safe_title, desc))
+                                        
+                                conn.commit()
+                                conn.close()
+                        except Exception as e:
+                            print(f"Failed to extract KB data for {safe_title}: {e}")
+                          
             except Exception as e:
                 print(f"Error ingesting {filename}: {e}")
                 self.error_occurred.emit(str(e))
@@ -414,9 +538,10 @@ class AILoreIngestor(QThread):
 class AILoreDriverWorker(QThread):
     prompt_ready = pyqtSignal(str, str, str) # title, subheading, prompt_text
     
-    def __init__(self, lore_dir, model="qwen2.5:latest", genre="Fantasy"):
+    def __init__(self, lore_dir, db_path, model="qwen2.5:latest", genre="Fantasy"):
         super().__init__()
         self.lore_dir = lore_dir
+        self.db_path = db_path
         self.model = model
         self.genre = genre
         
@@ -425,41 +550,36 @@ class AILoreDriverWorker(QThread):
             target_file = None
             target_subheading = None
             
-            for root, dirs, files in os.walk(self.lore_dir):
-                for f in files:
-                    if f.endswith('.md'):
-                        path = os.path.join(root, f)
-                        with open(path, 'r', encoding='utf-8') as file:
-                            lines = file.readlines()
-                            current_subheading = None
-                            for line in lines:
-                                if line.startswith('## '):
-                                    current_subheading = line.strip()[3:]
-                                elif '[NEEDS_DETAIL]' in line or '[CONFLICT]' in line:
-                                    target_file = path
-                                    target_subheading = current_subheading
-                                    break
-                        if target_file:
-                            break
-                if target_file:
-                    break
-                    
-            if not target_file:
+            import sqlite3
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Query for open inconsistencies
+            cursor.execute("SELECT source_id, description FROM inconsistencies WHERE status='open' LIMIT 1")
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                target_file = row[0]
+                target_subheading = "Lore Gap"
+                gap_description = row[1]
+                title = target_file
+            else:
                 return # No gaps found
                 
-            filename = os.path.basename(target_file)
-            title = os.path.splitext(filename)[0]
-            
             system_prompt = (
                 f"You are Worldsmith AI, an active worldbuilding director in a {self.genre} setting.\n"
-                f"The user has a note titled '{title}' that is missing information under the subheading '{target_subheading}'.\n"
-                "Ask exactly ONE short, probing question to encourage the user to fill out this specific missing detail.\n"
+                f"The user has a structural inconsistency or lore gap regarding '{title}': '{gap_description}'.\n"
+                "Ask exactly ONE short, probing question to encourage the user to fill out this missing detail or fix the contradiction.\n"
                 "CRITICAL: Do NOT answer the question yourself. Do not write creative content. Ask only the question."
             )
             
+            import urllib.request
+            import json
+            
             data = json.dumps({
                 "model": self.model,
-                "prompt": f"System: {system_prompt}\n\nUser: I need to fill out {target_subheading} for {title}. Ask me a question about it.",
+                "prompt": f"System: {system_prompt}\n\nUser: I have a lore gap in {title}: {gap_description}. Ask me a question to help fix it.",
                 "stream": False
             }).encode("utf-8")
 
