@@ -100,7 +100,10 @@ class InteractiveLordsmithMapCanvas(QWidget):
         self.active_layer = "States"
         self.hovered_cell_idx = -1
 
+
+
     def paintEvent(self, event):
+        from PyQt6.QtCore import QRect
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QColor("#09090d"))
@@ -108,42 +111,95 @@ class InteractiveLordsmithMapCanvas(QWidget):
         engine = self.main_window.map_engine
         if not getattr(engine, 'cells', None):
             painter.setPen(QColor("#a0a0c0"))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "WORLD NOT SYNTHESIZED YET\nIngest notes and resolve AI reconciliation questions.")
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "WORLD NOT SYNTHESIZED YET\\nIngest notes and resolve AI reconciliation questions.")
             return
 
         scale_x = self.width() / 1000.0
         scale_y = self.height() / 1000.0
+
+        if not hasattr(self, 'tileset_img'):
+            self.tileset_img = QPixmap(os.path.join(self.main_window.project_dir, 'assets', 'biome_tiles.jpg'))
+            
+            def get_rect(c, r):
+                # 1024x1024 divided by 6 cols, 5 rows = ~170x204 per cell
+                # Crop 120x120 from top-center to avoid text labels
+                return QRect(c * 170 + 25, r * 204 + 10, 120, 120)
+
+            # Map the exact AzgaarEngine biomes to the provided image grid
+            self.biome_tiles = {
+                # Row 0
+                "Tropical Rainforest": get_rect(0, 0),
+                "Tropical Forest": get_rect(0, 0),
+                "Temperate Forest": get_rect(1, 0),
+                "Taiga": get_rect(2, 0),
+                "Tundra": get_rect(3, 0),
+                "Ice Cap / Glacier": get_rect(3, 0),
+                "Savanna": get_rect(4, 0),
+                "Shrubland / Chaparral": get_rect(4, 0),
+                "Steppe / Grassland": get_rect(5, 0),
+                
+                # Row 1
+                "Arid Desert": get_rect(0, 1),
+                "Cold Desert": get_rect(0, 1),
+                "Alpine / Mountain": get_rect(2, 1),
+                
+                # Row 2 (Coastal/Benthic)
+                "Sunlit Coral Reef": get_rect(0, 2),
+                "Sandy Lagoon & Seagrass Bed": get_rect(4, 2),
+                "Benthopelagic Silt Plains": get_rect(2, 2),
+                "Abyssal Barren Desert": get_rect(2, 2),
+                "Abyssal Cryo-Brine Pool": get_rect(3, 2),
+                
+                # Row 3 (Open Ocean)
+                "Oceanic Pelagic Barrens": get_rect(0, 3),
+                "Deep Glass Sponge Reef": get_rect(4, 3),
+                "Chemosynthetic Thermal Oasis": get_rect(4, 3),
+                "Hydrothermal Chemotrophic Forest": get_rect(5, 3)
+            }
 
         for cell in engine.cells:
             cid = cell.get("i", 0)
             cx, cy = int(cell.get("centroid_x", 0) * scale_x), int(cell.get("centroid_y", 0) * scale_y)
             h = cell.get("h", 20)
 
-            cell_brush = QBrush(QColor("#181825"))
-            if self.active_layer == "States":
-                state_id = cell.get("state", 0)
-                color_hex = "#181825"
-                if state_id > 0 and hasattr(engine, 'states'):
-                    color_hex = next((s["color"] for s in engine.states if s["id"] == state_id), "#181825")
-                cell_brush = QBrush(QColor(color_hex))
-            elif self.active_layer == "Provinces":
-                prov_id = cell.get("province", 0)
-                prov_color = self.main_window.resolve_province_color_from_cache(prov_id)
-                cell_brush = QBrush(QColor(prov_color if prov_color else "#181825"))
-            elif self.active_layer == "Biomes":
-                biome_colors = {
-                    "Rainforest": "#106e2e", "Taiga": "#15803d", "Desert": "#ca8a04", 
-                    "Marine": "#0c4a6e", "Deep Sea": "#082f49", "Tundra": "#38bdf8", "Ice": "#e0f2fe"
-                }
-                cell_brush = QBrush(QColor(biome_colors.get(cell.get("biome", ""), "#1e293b")))
+            # Draw Tile if Biomes layer and tileset is loaded
+            if self.active_layer == "Biomes" and not self.tileset_img.isNull():
+                biome = cell.get("biome", "")
+                # Fallback to Pelagic Open Ocean (0,3) if ocean, or Grassland (5,0) if land
+                default_rect = get_rect(5, 0) if h >= 20 else get_rect(0, 3)
+                src_rect = self.biome_tiles.get(biome, default_rect)
+                
+                # Draw the hex tile centered on the point (scaled to 32x32 for map)
+                painter.drawPixmap(QRect(cx - 16, cy - 16, 32, 32), self.tileset_img, src_rect)
             else:
-                val = int((h / 100.0) * 180) + 70
-                cell_brush = QBrush(QColor(0, val, val // 2) if h >= 20 else QColor(0, val // 4, val))
+                # Fallback to Solid Color Ellipse
+                cell_brush = QBrush(QColor("#181825"))
+                if self.active_layer == "States":
+                    state_id = cell.get("state", 0)
+                    color_hex = "#181825"
+                    if state_id > 0 and hasattr(engine, 'states'):
+                        color_hex = next((s["color"] for s in engine.states if s["id"] == state_id), "#181825")
+                    cell_brush = QBrush(QColor(color_hex))
+                elif self.active_layer == "Provinces":
+                    prov_id = cell.get("province", 0)
+                    prov_color = self.main_window.resolve_province_color_from_cache(prov_id)
+                    cell_brush = QBrush(QColor(prov_color if prov_color else "#181825"))
+                elif self.active_layer == "Biomes":
+                    biome_colors = {
+                        "Rainforest": "#106e2e", "Taiga": "#15803d", "Desert": "#ca8a04", 
+                        "Marine": "#0c4a6e", "Deep Sea": "#082f49", "Tundra": "#38bdf8", "Ice": "#e0f2fe"
+                    }
+                    cell_brush = QBrush(QColor(biome_colors.get(cell.get("biome", ""), "#1e293b")))
+                else:
+                    val = int((h / 100.0) * 180) + 70
+                    cell_brush = QBrush(QColor(0, val, val // 2) if h >= 20 else QColor(0, val // 4, val))
+    
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(cell_brush)
+                if self.active_layer != "Biomes":
+                    painter.drawEllipse(cx - 10, cy - 10, 20, 20)
 
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(cell_brush)
-            painter.drawEllipse(cx - 10, cy - 10, 20, 20)
-
+            # Hover highlight
             if cid == self.hovered_cell_idx:
                 painter.setPen(QPen(QColor("#04D361"), 2))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
