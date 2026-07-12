@@ -1,6 +1,8 @@
 import sys
 import traceback
 import time
+import os
+import tempfile
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtTest import QTest
 from PyQt6.QtCore import Qt, QPoint, QPointF
@@ -10,7 +12,12 @@ from python_fmg.main import LordsmithStudioMainWindow
 class E2ETester:
     def __init__(self):
         self.app = QApplication(sys.argv)
-        self.window = LordsmithStudioMainWindow()
+        # ISOLATION: Use a temporary directory for DB to avoid wiping user data
+        self.temp_dir = tempfile.mkdtemp()
+        self.window = LordsmithStudioMainWindow(project_dir=self.temp_dir)
+        # Override db path directly
+        self.window.db_path = os.path.join(self.temp_dir, "test_lore_forge.db")
+        
         self.errors = []
         sys.excepthook = self.handle_exception
 

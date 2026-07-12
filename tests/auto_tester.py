@@ -1,6 +1,8 @@
 import sys
 import traceback
 import time
+import os
+import tempfile
 from PyQt6.QtWidgets import QApplication, QPushButton, QComboBox, QCheckBox, QToolButton, QMessageBox
 from PyQt6.QtGui import QAction
 from python_fmg.main import LordsmithStudioMainWindow
@@ -24,7 +26,11 @@ class Fuzzer:
         QInputDialog.getItem = classmethod(lambda *args, **kwargs: ("Item", True))
         QMenu.exec = lambda *args, **kwargs: None
         
-        self.window = LordsmithStudioMainWindow()
+        # ISOLATION: Use a temporary directory for DB to avoid wiping user data
+        self.temp_dir = tempfile.mkdtemp()
+        self.window = LordsmithStudioMainWindow(project_dir=self.temp_dir)
+        # Override db path directly
+        self.window.db_path = os.path.join(self.temp_dir, "test_lore_forge.db")
         
         self.errors = []
         sys.excepthook = self.handle_exception

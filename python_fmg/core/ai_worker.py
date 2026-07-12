@@ -5,6 +5,7 @@ import urllib.request
 import urllib.error
 import time
 import random
+import re
 from PyQt6.QtCore import QThread, pyqtSignal
 
 # =============================================================================
@@ -37,6 +38,11 @@ class LordsmithAIClient:
         if json_schema:
             ollama_payload["format"] = "json"
 
+        def _clean_response(text):
+            if json_schema:
+                text = re.sub(r'```json|```', '', text).strip()
+            return text
+
         try:
             req = urllib.request.Request(
                 ollama_url,
@@ -46,7 +52,7 @@ class LordsmithAIClient:
             with urllib.request.urlopen(req, timeout=8) as response:
                 if response.status == 200:
                     resp_data = json.loads(response.read().decode("utf-8"))
-                    return resp_data.get("response", "").strip()
+                    return _clean_response(resp_data.get("response", "").strip())
         except Exception:
             # Local Ollama unavailable or timed out; fall back to Google Gemini API
             pass
@@ -83,7 +89,7 @@ class LordsmithAIClient:
                     if response.status == 200:
                         resp_data = json.loads(response.read().decode("utf-8"))
                         text_resp = resp_data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                        return text_resp.strip()
+                        return _clean_response(text_resp.strip())
             except urllib.error.HTTPError as he:
                 # If unauthorized or bad schema, do not retry blindly
                 if he.code in [400, 401, 403]:
@@ -134,7 +140,8 @@ class LoreAuditWorker(QThread):
     def run(self):
         anomalies = []
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=15.0)
+            conn.execute("PRAGMA journal_mode=WAL;")
             cursor = conn.cursor()
 
             # Compile world state snapshot for the model
@@ -183,18 +190,12 @@ class LoreAuditWorker(QThread):
 
             # Parse returned results safely
             try:
-                # Strip markdown fence blocks if LLM included them despite schema instructions
                 clean_resp = resp.strip()
-                if clean_resp.startswith("```json"):
-                    clean_resp = clean_resp[7:]
-                if clean_resp.endswith("```"):
-                    clean_resp = clean_resp[:-3]
-                
-                anomalies = json.loads(clean_resp.strip())
+                anomalies = json.loads(clean_resp)
             except Exception:
                 # Fallback simple line parsing if JSON parsing fails
                 if resp and "Error" not in resp:
-                    anomalies = [line.strip() for line in resp.split("\\n") if line.strip()][:3]
+                    anomalies = [line.strip() for line in resp.split("\n") if line.strip()][:3]
 
         except Exception as e:
             anomalies = [f"Auditor bypass exception: {str(e)}"]
@@ -273,7 +274,7 @@ class AILoreIngestor(QThread):
                     raw_prose = f.read()
 
                 # Extract entities matching our SQLite schemas
-                prompt = f"Dissect and extract worldbuilding entities from this text:\\n\\n{raw_prose}"
+                prompt = f"Dissect and extract worldbuilding entities from this text:\n\n{raw_prose}"
                 resp = LordsmithAIClient.execute_prompt(
                     prompt,
                     system_instruction=f"You are a master relational parser of {self.genre} lore. Output structured JSON blocks conforming to the requested schema.",
@@ -282,12 +283,7 @@ class AILoreIngestor(QThread):
 
                 # Process raw reply
                 clean_resp = resp.strip()
-                if clean_resp.startswith("```json"):
-                    clean_resp = clean_resp[7:]
-                if clean_resp.endswith("```"):
-                    clean_resp = clean_resp[:-3]
-
-                dissected_data = json.loads(clean_resp.strip())
+                dissected_data = json.loads(clean_resp)
                 category = dissected_data.get("category", "General")
 
                 # Sync parsed entries straight to SQLite
@@ -310,7 +306,8 @@ class AILoreIngestor(QThread):
         """Pushes parsed entity structures safely to SQL using Foreign Key links."""
         title = os.path.splitext(os.path.basename(original_path))[0]
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=15.0)
+            conn.execute("PRAGMA journal_mode=WAL;")
             cursor = conn.cursor()
 
             # Insert raw note
