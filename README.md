@@ -1,16 +1,35 @@
-# Worldsmith Sandbox
+# Lordsmith Studio
 
-Worldsmith Sandbox is a procedural fantasy map generator and worldbuilding suite powered by a high-performance Python engine, a rich PyQt6 interface, and integrated local LLM capabilities via Ollama. 
+Lordsmith Studio is a procedural fantasy map generator and holistic worldbuilding suite powered by a high-performance Python engine, a rich PyQt6 interface, and integrated local/cloud LLM capabilities. 
 
-It aims to provide a unified environment for generating Voronoi-based terrain, simulating hydrology and biomes, placing settlements, and curating an interconnected lore database.
+It aims to provide a unified environment for generating Voronoi-based terrain, simulating hydrology and biomes, mapping structured societies, and curating an interconnected lore database.
 
-## Features
+## 🌟 Key Features
 
-- **Procedural Engine**: Generates a customizable Voronoi mesh, simulating tectonic plates, heightmaps, rivers, and biomes.
-- **Interactive Map Canvas**: Fully interactable panning and zooming UI for viewing heightmaps, cultures, states, and relief icons.
-- **Magic Brushes**: Modify terrain, borders, and state ownership directly on the map.
-- **Lore Database**: Interconnected notes system backed by a local SQLite database (`lore_forge_world.db`).
-- **AI Integration**: The AI acts purely as an analytical assistant using Ollama. It audits your timeline for continuity, organizes your thoughts, and encourages new lore creation by identifying gaps. All creative writing is done entirely by you.
+### 🗺️ The Map Engine
+- **Procedural Voronoi Engine**: Generates a customizable Voronoi mesh, simulating tectonic plates, heightmaps, rivers, and 24 terrestrial/aquatic biomes.
+- **Custom Heightmap Uplink**: Upload your own 2D `.png` or `.jpg` grayscale heightmap to instantly shape the world's continents.
+- **High-Res Biome Tile Rendering**: Features a 1D Euclidean interactive canvas that renders hand-painted biome sprite sheets seamlessly across the hex grid.
+- **Dynamic Layers**: Swap between distinct visual mapping layers instantly (States, Provinces, Biomes, Elevation, Rivers, and Magical Leylines).
+
+### 🏛️ The Database & UI Architecture
+- **17 Subsystem Matrices**: Manage every aspect of your world across 17 distinct interactive ledger tabs (Factions, Provinces, Religions, Cultures, Military, Trade, Geography, and Shadow Networks).
+- **Temporal Mechanics**: Define planetary moons (affecting tides/magic), calendar season configurations, and historical timelines bound to specific coordinate cells.
+- **Inspector Window**: Contextually edits fields and synchronizes instantly across the map.
+
+### ✍️ The Lore Editor
+- **Interactive Markdown Notebook**: Write your world's prose inside an interactive editor.
+- **Live Syntax Highlighting**: Color-codes and underlines `[[WikiLinks]]` and `(cell_idx: 250)` coordinate tags in real-time.
+- **Spatial Click-Binding**: Clicking coordinate nodes within your text will dynamically pan and highlight the map canvas to the exact cell.
+
+### 🧠 The AI Pipeline
+- **Lordsmith AI Client**: Employs a 5-stage exponential backoff algorithm that first queries your local **Ollama** endpoint for total privacy, silently failing over to the **Google Gemini API** if offline.
+- **Lore Auditor**: Analyzes your prose against the 17 SQL tables to flag ecological, political, or magical contradictions automatically.
+- **Bulk Lore Ingestor**: Converts unstructured prose documents into rigidly structured foreign-key JSON nodes.
+
+### 📤 Exporters
+- **GeoJSON Framework**: Export your borders, nodes, and cells into standard GIS formats.
+- **Static HTML Wiki**: Compiles your entire database of cross-linked notes into a beautiful, static, offline-ready HTML website index.
 
 ## Installation
 
@@ -20,40 +39,14 @@ It aims to provide a unified environment for generating Voronoi-based terrain, s
    ```bash
    pip install -r requirements.txt
    ```
-4. If you want to use the AI features, install and run [Ollama](https://ollama.com/) locally.
+4. If you want to use the offline AI features, install and run [Ollama](https://ollama.com/) locally.
 
 ## Usage
 
 Start the main application UI:
 ```bash
-python -m python_fmg.main
+python python_fmg/main.py
 ```
-
-You can also run the automated UI fuzzers and End-to-End simulation tests in the `tests/` directory:
-```bash
-python -m tests.auto_tester
-python -m tests.e2e_tester
-```
-
-## Documentation
-See the `docs/` folder for comprehensive documentation:
-- [Architecture](docs/architecture.md): Overview of the engine, database, and UI.
-- [User Guide](docs/user_guide.md): Instructions on map brushes and lore tools.
-- [Testing](docs/testing.md): Automated UI fuzzer and E2E simulation details.
-
-## Contributing
-
-We welcome contributions! To ensure stability, please run the automated test suites before submitting a pull request:
-
-```bash
-# Run the autonomous UI fuzzer to catch signal errors
-python -m tests.auto_tester
-
-# Run the End-to-End simulation to verify map logic and database persistence
-python -m tests.e2e_tester
-```
-
-Please see our [Architecture](docs/architecture.md) documentation for an overview of the codebase before making structural changes.
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
