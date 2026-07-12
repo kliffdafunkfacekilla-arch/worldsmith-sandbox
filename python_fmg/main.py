@@ -623,8 +623,10 @@ class LordsmithStudioMainWindow(QMainWindow):
         self.panel_left = QWidget()
         pl_lay = QVBoxLayout(self.panel_left)
         pl_lay.addWidget(QLabel("<b>✍️ Narrative Lore Writer</b>"))
-        self.note_writer = QTextEdit()
+        self.note_writer = MarkdownNotebookEditor(self.panel_left)
         pl_lay.addWidget(self.note_writer, 1)
+        self.note_writer.spatial_bind_clicked.connect(self.handle_spatial_bind_clicked)
+        self.note_writer.wiki_link_clicked.connect(self.handle_wiki_link_clicked)
         self.panels_splitter.addWidget(self.panel_left)
 
         # Middle panel: Subsystem Registry Stack
@@ -791,6 +793,29 @@ class LordsmithStudioMainWindow(QMainWindow):
                     QMessageBox.critical(self, "Export Error", f"Failed to compile Wiki: {msg}")
             except Exception as e:
                 QMessageBox.critical(self, "Export Error", f"Exception compiling Wiki: {e}")
+
+
+    def handle_spatial_bind_clicked(self, cell_idx):
+        if not self.btn_toggle_map.isChecked():
+            self.btn_toggle_map.setChecked(True)
+            self.toggle_map_view(True)
+        # Emulate a hover/click on the cell
+        self.map_viewer_canvas.hovered_cell_idx = cell_idx
+        self.map_viewer_canvas.update()
+        
+    def handle_wiki_link_clicked(self, title):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT content FROM notes WHERE title = ?", (title,))
+            res = cursor.fetchone()
+            conn.close()
+            if res:
+                self.note_writer.setText(res[0])
+            else:
+                QMessageBox.information(self, "Note Not Found", f"No lore entry found for: {title}")
+        except Exception as e:
+            print(f"Error fetching note: {e}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
