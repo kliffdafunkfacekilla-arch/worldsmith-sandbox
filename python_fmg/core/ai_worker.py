@@ -4,6 +4,7 @@ import json
 import urllib.request
 import urllib.error
 import time
+import random
 from PyQt6.QtCore import QThread, pyqtSignal
 
 # =============================================================================
@@ -19,7 +20,7 @@ class LordsmithAIClient:
     endpoints or Google Gemini API with mandatory exponential backoff and error handling.
     """
     @staticmethod
-    def execute_prompt(prompt, system_instruction=None, json_schema=None, api_key=""):
+    def execute_prompt(prompt, system_instruction=None, json_schema=None, api_key="", model_name="qwen2.5:latest"):
         """
         Sends inference request to the available backend. 
         Tries local Ollama first, falling back to Google Gemini if configured or needed.
@@ -27,7 +28,7 @@ class LordsmithAIClient:
         # We try local Ollama first as the default offline desktop companion
         ollama_url = "http://localhost:11434/api/generate"
         ollama_payload = {
-            "model": "llama3",
+            "model": model_name,
             "prompt": prompt,
             "stream": False
         }

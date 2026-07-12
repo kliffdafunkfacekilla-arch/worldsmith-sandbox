@@ -5,12 +5,12 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtTest import QTest
 from PyQt6.QtCore import Qt, QPoint, QPointF
 from PyQt6.QtGui import QMouseEvent
-from python_fmg.main import WorldsmithMainWindow
+from python_fmg.main import LordsmithStudioMainWindow
 
 class E2ETester:
     def __init__(self):
         self.app = QApplication(sys.argv)
-        self.window = WorldsmithMainWindow()
+        self.window = LordsmithStudioMainWindow()
         self.errors = []
         sys.excepthook = self.handle_exception
 

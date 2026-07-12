@@ -596,8 +596,6 @@ class LordsmithStudioMainWindow(QMainWindow):
         
         self.db_path = os.path.join(self.project_dir, "lore_forge_world.db")
         # Ensure fresh run if schema gets borked during sandbox testing
-        if os.path.exists(self.db_path):
-            os.remove(self.db_path)
         setup_master_knowledge_db(self.db_path)
 
         self.map_engine = AzgaarEngine()

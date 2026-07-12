@@ -3,7 +3,7 @@ import traceback
 import time
 from PyQt6.QtWidgets import QApplication, QPushButton, QComboBox, QCheckBox, QToolButton, QMessageBox
 from PyQt6.QtGui import QAction
-from python_fmg.main import WorldsmithMainWindow
+from python_fmg.main import LordsmithStudioMainWindow
 
 class Fuzzer:
     def __init__(self):
@@ -24,7 +24,7 @@ class Fuzzer:
         QInputDialog.getItem = classmethod(lambda *args, **kwargs: ("Item", True))
         QMenu.exec = lambda *args, **kwargs: None
         
-        self.window = WorldsmithMainWindow()
+        self.window = LordsmithStudioMainWindow()
         
         self.errors = []
         sys.excepthook = self.handle_exception
