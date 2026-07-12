@@ -586,6 +586,7 @@ class ProjectStartupWizard(QDialog):
 # MAIN WINDOW ARCHITECTURE
 # =============================================================================
 class LordsmithStudioMainWindow(QMainWindow):
+
     def __init__(self, project_dir):
         super().__init__()
         self.project_dir = os.path.abspath(project_dir)
@@ -598,9 +599,20 @@ class LordsmithStudioMainWindow(QMainWindow):
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
         setup_master_knowledge_db(self.db_path)
+
         self.map_engine = AzgaarEngine()
 
+        # Build Export Menu
+        file_menu = self.menuBar().addMenu("File")
+        
+        action_export_geojson = file_menu.addAction("Export GeoJSON Framework")
+        action_export_geojson.triggered.connect(self.action_export_geojson)
+        
+        action_export_wiki = file_menu.addAction("Export Static HTML Wiki")
+        action_export_wiki.triggered.connect(self.action_export_wiki)
+
         central_container = QWidget()
+
         self.setCentralWidget(central_container)
         main_h_layout = QHBoxLayout(central_container)
 
@@ -753,6 +765,32 @@ class LordsmithStudioMainWindow(QMainWindow):
                 QMessageBox.information(self, "Success", "Custom heightmap applied successfully!")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to apply heightmap: {e}")
+
+
+    def action_export_geojson(self):
+        from python_fmg.core.export_engine import WorldsmithExportEngine
+        out_path, _ = QFileDialog.getSaveFileName(self, "Export GeoJSON", os.path.join(self.project_dir, "map.geojson"), "GeoJSON Files (*.geojson)")
+        if out_path:
+            try:
+                exporter = WorldsmithExportEngine(self)
+                exporter.compile_geojson_framework(out_path)
+                QMessageBox.information(self, "Export Complete", f"GeoJSON exported to: {out_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Export Error", f"Failed to export GeoJSON: {e}")
+
+    def action_export_wiki(self):
+        from python_fmg.core.wiki_compiler import WikiCompiler
+        out_dir = QFileDialog.getExistingDirectory(self, "Select Wiki Export Directory", self.project_dir)
+        if out_dir:
+            try:
+                compiler = WikiCompiler(db_path=self.db_path, output_dir=out_dir)
+                success, msg = compiler.compile_wiki()
+                if success:
+                    QMessageBox.information(self, "Export Complete", msg)
+                else:
+                    QMessageBox.critical(self, "Export Error", f"Failed to compile Wiki: {msg}")
+            except Exception as e:
+                QMessageBox.critical(self, "Export Error", f"Exception compiling Wiki: {e}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
