@@ -609,6 +609,10 @@ class LordsmithStudioMainWindow(QMainWindow):
         self.btn_toggle_map.clicked.connect(self.toggle_map_view)
         pr_lay.addWidget(self.btn_toggle_map)
         
+        self.btn_upload_heightmap = QPushButton("🗺️ Upload Custom Heightmap Image")
+        self.btn_upload_heightmap.clicked.connect(self.action_upload_heightmap)
+        pr_lay.addWidget(self.btn_upload_heightmap)
+        
         self.right_stack = QStackedWidget()
         self.form_widget = QScrollArea()
         self.form_widget.setWidgetResizable(True)
@@ -674,6 +678,25 @@ class LordsmithStudioMainWindow(QMainWindow):
 
     def toggle_map_view(self, checked):
         self.right_stack.setCurrentIndex(1 if checked else 0)
+
+    def action_upload_heightmap(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select Heightmap Image", "", "Images (*.png *.jpg *.jpeg)")
+        if file_path:
+            try:
+                # Seed Voronoi if empty
+                if not getattr(self.map_engine, 'cells', None):
+                    self.map_engine.generate_voronoi_mesh(1000)
+                # Run the pipeline with the image
+                self.map_engine.run_heightmap_pipeline(file_path)
+                if hasattr(self.map_engine, 'run_biomes_climate'):
+                    self.map_engine.run_biomes_climate()
+                # Switch to map view
+                self.btn_toggle_map.setChecked(True)
+                self.toggle_map_view(True)
+                self.map_viewer_canvas.update()
+                QMessageBox.information(self, "Success", "Custom heightmap applied successfully!")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to apply heightmap: {e}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

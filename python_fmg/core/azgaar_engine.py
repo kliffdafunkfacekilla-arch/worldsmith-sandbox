@@ -2,6 +2,7 @@ import math
 import random
 import sqlite3
 import json
+from PyQt6.QtGui import QImage, qRed
 
 class CosmosEngine:
     """Manages astronomical timelines, seasons, and celestial tracking variables."""
@@ -80,11 +81,27 @@ class AzgaarEngine:
             neighbors_count = random.randint(5, 7)
             c1["neighbors"] = [idx for (_, idx) in dists[:neighbors_count]]
 
-    def run_heightmap_pipeline(self):
+    def run_heightmap_pipeline(self, image_path=None):
         """
         Applies a multi-octave island heightmask over the mesh.
         Creates organic continents, coastal shelves, and rugged mountain spines.
+        Optionally uses an uploaded image for the heightmap.
         """
+        if image_path:
+            img = QImage(image_path)
+            if not img.isNull():
+                img = img.scaled(self.width, self.height)
+                for cell in self.cells:
+                    cx = int(cell["centroid_x"])
+                    cy = int(cell["centroid_y"])
+                    if 0 <= cx < self.width and 0 <= cy < self.height:
+                        pixel = img.pixel(cx, cy)
+                        brightness = qRed(pixel)  # use red channel for grayscale proxy
+                        # Map brightness 0-255 to height 0-100
+                        height = (brightness / 255.0) * 100
+                        cell["h"] = int(max(5, min(100, height)))
+                return
+
         center_x = self.width / 2
         center_y = self.height / 2
         max_dist = math.hypot(center_x, center_y)
