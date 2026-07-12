@@ -3,6 +3,7 @@ import sys
 import sqlite3
 import json
 import random
+import math
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
@@ -14,7 +15,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QPointF, QPoint, pyqtSignal, QTimer, QDir, QThread, QObject
 from PyQt6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QFont, QPixmap,
+    QPainter, QColor, QPen, QBrush, QFont, QPixmap, QImage,
     QTextCursor, QTextCharFormat, QFileSystemModel
 )
 
@@ -22,360 +23,502 @@ from PyQt6.QtGui import (
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from python_fmg.core.ai_worker import OllamaPromptWorker, LoreAuditWorker, AILoreIngestor, AILoreDriverWorker
-from python_fmg.renderers.map_viewer import MapViewerWidget
 from python_fmg.renderers.notebook_editor import MarkdownNotebookEditor
 from python_fmg.core.azgaar_engine import AzgaarEngine, CosmosEngine
-from python_fmg.core.wiki_compiler import WikiCompiler
-from python_fmg.renderers.celestial_widget import CelestialPreviewWidget
-from python_fmg.core.template_manager import TemplateManager
-from python_fmg.ui.map_binding import MapBindingDialog
-from python_fmg.core.emblem_generator import EmblemGenerator
-from python_fmg.core.burg_generator import BurgGenerator
 
-def setup_cohesive_knowledge_db(db_path):
-    """Creates a fully normalized, foreign-key-constrained SQLite database structure on boot."""
+# =============================================================================
+# COHESIVE RELATIONAL DATABASE INITIALIZATION WITH TEMPORAL MODULES
+# =============================================================================
+def setup_master_knowledge_db(db_path):
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         cursor.execute("PRAGMA foreign_keys = ON;")
         
-        # 1. Narrative Notes Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS notes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT UNIQUE NOT NULL,
-                content TEXT NOT NULL,
-                category TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        cursor.execute("CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT UNIQUE NOT NULL, content TEXT NOT NULL, category TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS factions (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, color TEXT NOT NULL, gov_type TEXT DEFAULT 'Feudal Monarchy', dominant_cultures TEXT, dominant_religions TEXT, leaders TEXT, imports TEXT, exports TEXT, aggression_scale INTEGER DEFAULT 5, trade_scale INTEGER DEFAULT 5, explore_scale INTEGER DEFAULT 5, espionage_scale INTEGER DEFAULT 5, morale INTEGER DEFAULT 5, crime INTEGER DEFAULT 5, poverty INTEGER DEFAULT 5, freedom INTEGER DEFAULT 5, magic_stance TEXT DEFAULT 'Regulated', domain_type TEXT DEFAULT 'Both', treasury REAL DEFAULT 1000.0, capital_cell INTEGER, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS provinces (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, color TEXT NOT NULL, state_id INTEGER NOT NULL, governor_name TEXT, tax_rate REAL DEFAULT 10.0, local_morale INTEGER DEFAULT 5, local_crime INTEGER DEFAULT 5, local_poverty INTEGER DEFAULT 5, local_freedom INTEGER DEFAULT 5, local_magic_handling TEXT DEFAULT 'Lax Enforcement', associated_note_id INTEGER, FOREIGN KEY(state_id) REFERENCES factions(id) ON DELETE CASCADE, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS cultures (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, code TEXT NOT NULL, language_base TEXT DEFAULT 'Imperial', trait_type TEXT DEFAULT 'None', trait_modifier REAL DEFAULT 1.0, domain_type TEXT DEFAULT 'Both', associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS cell_cultures_overlap (cell_id INTEGER NOT NULL, culture_id INTEGER NOT NULL, density REAL DEFAULT 1.0, PRIMARY KEY (cell_id, culture_id), FOREIGN KEY(culture_id) REFERENCES cultures(id) ON DELETE CASCADE)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS religions (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, color TEXT NOT NULL, religion_type TEXT DEFAULT 'Deity-Centric', is_official INTEGER DEFAULT 0, devotion INTEGER DEFAULT 5, recruit_rate INTEGER DEFAULT 5, rival_religion_ids TEXT, leaders TEXT, supreme_deity TEXT DEFAULT 'Solis', domain_type TEXT DEFAULT 'Both', holy_site_cell INTEGER, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS military (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, faction_id INTEGER, cell_idx INTEGER, troops_count INTEGER DEFAULT 1000, unit_type TEXT DEFAULT 'Infantry', tech_dependency_id INTEGER, associated_note_id INTEGER, FOREIGN KEY(faction_id) REFERENCES factions(id) ON DELETE SET NULL, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS defensive_structures (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, structure_type TEXT DEFAULT 'Watchtower', cell_idx INTEGER NOT NULL, defense_value INTEGER DEFAULT 5, garrison_capacity INTEGER DEFAULT 500, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS production_goods (cell_id INTEGER PRIMARY KEY, good TEXT NOT NULL, valuation REAL DEFAULT 1.0, is_finite INTEGER DEFAULT 0, max_capacity REAL DEFAULT 1000.0, current_capacity REAL DEFAULT 1000.0, is_market_center INTEGER DEFAULT 0, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS trade_routes (id INTEGER PRIMARY KEY AUTOINCREMENT, origin_cell INTEGER NOT NULL, destination_cell INTEGER NOT NULL, route_type TEXT DEFAULT 'Cobbled Road', safety_index REAL DEFAULT 1.0)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS cells (id INTEGER PRIMARY KEY, centroid_x REAL NOT NULL, centroid_y REAL NOT NULL, elevation INTEGER DEFAULT 20, moisture INTEGER DEFAULT 10, temperature INTEGER DEFAULT 15, biome TEXT DEFAULT 'Marine', plant_value INTEGER DEFAULT 5, prey_value INTEGER DEFAULT 5, predator_value INTEGER DEFAULT 5, state_id INTEGER, province_id INTEGER, culture_id INTEGER, religion_id INTEGER, FOREIGN KEY(state_id) REFERENCES factions(id) ON DELETE SET NULL, FOREIGN KEY(province_id) REFERENCES provinces(id) ON DELETE SET NULL, FOREIGN KEY(culture_id) REFERENCES cultures(id) ON DELETE SET NULL, FOREIGN KEY(religion_id) REFERENCES religions(id) ON DELETE SET NULL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS settlements (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, population REAL DEFAULT 10.0, cell_idx INTEGER, faction_id INTEGER, culture_id INTEGER, has_port INTEGER DEFAULT 0, has_university INTEGER DEFAULT 0, notable_locations TEXT, notable_persons_links TEXT, leaders_links TEXT, associated_note_id INTEGER, FOREIGN KEY(faction_id) REFERENCES factions(id) ON DELETE SET NULL, FOREIGN KEY(culture_id) REFERENCES cultures(id) ON DELETE SET NULL, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS geography_plates (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, movement_vector TEXT NOT NULL, volcanic_index REAL DEFAULT 1.0, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS magic_layers (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL, mode_type TEXT DEFAULT 'Point', origin_cell_idx INTEGER NOT NULL, termination_cell_idx INTEGER, radius_of_effect INTEGER DEFAULT 10, intensity REAL DEFAULT 1.0, effect_field_description TEXT, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS tech_eras (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, description TEXT, year_range TEXT NOT NULL, buff_type TEXT DEFAULT 'Extraction Speed', buff_modifier REAL DEFAULT 1.0, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS influence_factions (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, category TEXT DEFAULT 'Secret Society', leaders TEXT, headquarters_cell INTEGER, influence_effect_type TEXT DEFAULT 'Crime Catalyst', influence_intensity REAL DEFAULT 1.0, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS cell_shadow_influence (cell_id INTEGER NOT NULL, influence_faction_id INTEGER NOT NULL, grip_strength REAL DEFAULT 0.5, PRIMARY KEY (cell_id, influence_faction_id), FOREIGN KEY(influence_faction_id) REFERENCES influence_factions(id) ON DELETE CASCADE)")
+        
+        cursor.execute("CREATE TABLE IF NOT EXISTS calendar_config (id INTEGER PRIMARY KEY AUTOINCREMENT, year_length INTEGER DEFAULT 360, months_json TEXT, seasons_json TEXT)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS moons (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, period INTEGER DEFAULT 30, size_multiplier REAL DEFAULT 1.0, gravitational_tide_mod REAL DEFAULT 1.0, arcane_flux_modifier REAL DEFAULT 1.0)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS timeline_events (id INTEGER PRIMARY KEY AUTOINCREMENT, year INTEGER NOT NULL, day INTEGER DEFAULT 1, title TEXT NOT NULL, description TEXT, faction_id INTEGER, cell_idx INTEGER, associated_note_id INTEGER, FOREIGN KEY(faction_id) REFERENCES factions(id) ON DELETE SET NULL, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
+        
+        cursor.execute("CREATE TABLE IF NOT EXISTS note_map_bindings (note_id INTEGER, cell_idx INTEGER, PRIMARY KEY (note_id, cell_idx))")
+        cursor.execute("CREATE TABLE IF NOT EXISTS markdown_map_bindings (title TEXT PRIMARY KEY, bind_type TEXT, bind_target TEXT, cell_idx INTEGER)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS inconsistencies (id INTEGER PRIMARY KEY AUTOINCREMENT, subject_type TEXT, subject_id INTEGER, description TEXT, status TEXT DEFAULT 'Active')")
+        cursor.execute("CREATE TABLE IF NOT EXISTS map_snapshots (year INTEGER PRIMARY KEY, engine_state_json BLOB)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS markers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, type TEXT NOT NULL, cell_idx INTEGER NOT NULL, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
 
-        # 2. Factions (Sovereign States)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS factions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                color TEXT NOT NULL,
-                expansionism REAL DEFAULT 1.0,
-                treasury REAL DEFAULT 1000.0,
-                capital_cell INTEGER,
-                associated_note_id INTEGER,
-                FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL
-            )
-        """)
-
-        # 3. Internal State Provinces
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS provinces (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                color TEXT NOT NULL,
-                state_id INTEGER NOT NULL,
-                associated_note_id INTEGER,
-                FOREIGN KEY(state_id) REFERENCES factions(id) ON DELETE CASCADE,
-                FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL
-            )
-        """)
-
-        # 4. Ethno-Linguistic Cultures & Species
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS cultures (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                code TEXT NOT NULL,
-                language_base TEXT DEFAULT 'Imperial',
-                associated_note_id INTEGER,
-                FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL
-            )
-        """)
-
-        # 5. Religions & Pantheons
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS religions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                color TEXT NOT NULL,
-                supreme_deity TEXT DEFAULT 'Unknown',
-                associated_note_id INTEGER,
-                FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL
-            )
-        """)
-
-        # 6. Physical Settlements (Burgs)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS settlements (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                population REAL DEFAULT 10.0,
-                cell_idx INTEGER,
-                faction_id INTEGER,
-                culture_id INTEGER,
-                associated_note_id INTEGER,
-                FOREIGN KEY(faction_id) REFERENCES factions(id) ON DELETE SET NULL,
-                FOREIGN KEY(culture_id) REFERENCES cultures(id) ON DELETE SET NULL,
-                FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL
-            )
-        """)
-
-        # 7. Spatial Mesh Coordinate Cache
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS cells (
-                id INTEGER PRIMARY KEY,
-                centroid_x REAL NOT NULL,
-                centroid_y REAL NOT NULL,
-                elevation INTEGER DEFAULT 20,
-                moisture INTEGER DEFAULT 10,
-                temperature INTEGER DEFAULT 15,
-                biome TEXT DEFAULT 'Marine',
-                state_id INTEGER,
-                province_id INTEGER,
-                culture_id INTEGER,
-                religion_id INTEGER,
-                FOREIGN KEY(state_id) REFERENCES factions(id) ON DELETE SET NULL,
-                FOREIGN KEY(province_id) REFERENCES provinces(id) ON DELETE SET NULL,
-                FOREIGN KEY(culture_id) REFERENCES cultures(id) ON DELETE SET NULL,
-                FOREIGN KEY(religion_id) REFERENCES religions(id) ON DELETE SET NULL
-            )
-        """)
-
-        # 8. Note Geography Bindings Map
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS note_map_bindings (
-                note_id INTEGER NOT NULL,
-                cell_idx INTEGER NOT NULL,
-                PRIMARY KEY (note_id, cell_idx),
-                FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE,
-                FOREIGN KEY(cell_idx) REFERENCES cells(id) ON DELETE CASCADE
-            )
-        """)
-
-        # 9. AI Reconciliation Anomaly Log
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS inconsistencies (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                subject_type TEXT NOT NULL,
-                subject_id INTEGER,
-                description TEXT NOT NULL,
-                suggested_solution TEXT,
-                status TEXT DEFAULT 'Active'
-            )
-        """)
-
-        # 10. Magic Leylines Layer
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS magic_layers (
-                cell_idx INTEGER PRIMARY KEY,
-                magic_type TEXT NOT NULL,
-                intensity REAL DEFAULT 1.0
-            )
-        """)
-
-        # 11. Economic Commodities
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS production_goods (
-                cell_id INTEGER PRIMARY KEY,
-                good TEXT NOT NULL,
-                valuation REAL DEFAULT 1.0
-            )
-        """)
-
-        # 12. Timeline map snapshots
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS map_snapshots (
-                year INTEGER PRIMARY KEY,
-                engine_state_json BLOB NOT NULL
-            )
-        """)
+        cursor.execute("SELECT COUNT(*) FROM factions")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("INSERT OR IGNORE INTO factions (id, name, color, gov_type, aggression_scale, trade_scale, morale, magic_stance, domain_type, treasury) VALUES (1, 'Vulfurn Magocracy', '#ef4444', 'Magocracy', 8, 4, 7, 'Ruling Class', 'Both', 5000.0)")
+            cursor.execute("INSERT OR IGNORE INTO factions (id, name, color, gov_type, aggression_scale, trade_scale, morale, magic_stance, domain_type, treasury) VALUES (2, 'Chipis Union', '#3b82f6', 'Merchant Oligarchy', 3, 9, 6, 'Repressed', 'Land', 8500.0)")
+            cursor.execute("INSERT OR IGNORE INTO provinces (id, name, color, state_id, governor_name, local_morale, local_crime, local_magic_handling) VALUES (10, 'Shattered Marches', '#fca5a5', 1, 'Inquisitor Vael', 4, 8, 'Strict Inquisition')")
+            cursor.execute("INSERT OR IGNORE INTO provinces (id, name, color, state_id, governor_name, local_morale, local_crime, local_magic_handling) VALUES (20, 'Ostraka Coastline', '#93c5fd', 2, 'Prefect Vance', 8, 2, 'Sanctuary')")
+            cursor.execute("INSERT OR IGNORE INTO cultures (id, name, code, language_base, trait_type, trait_modifier) VALUES (50, 'Boreal Elves', 'BE', 'Elven', 'Arcane Catalyst', 1.25)")
+            cursor.execute("INSERT OR IGNORE INTO cultures (id, name, code, language_base, trait_type, trait_modifier) VALUES (51, 'Abyssal Gill-kin', 'AG', 'DeepSpeech', 'Resource Drain', 0.85)")
+            cursor.execute("INSERT OR IGNORE INTO religions (id, name, color, religion_type, devotion, recruit_rate, supreme_deity, domain_type) VALUES (201, 'Eternal Sun Creed', '#eab308', 'Deity-Centric', 9, 7, 'Solis the Unconquered', 'Both')")
+            cursor.execute("INSERT OR IGNORE INTO influence_factions (id, name, category, leaders, influence_effect_type, influence_intensity) VALUES (301, 'The Obsidian Cartel', 'Criminal Cartel', 'Enzo the Silk Finger', 'Crime Catalyst', 1.50)")
+            cursor.execute("INSERT OR IGNORE INTO calendar_config (id, year_length, months_json, seasons_json) VALUES (1, 420, '[]', '[]')")
+            cursor.execute("INSERT OR IGNORE INTO moons (id, name, period, size_multiplier, gravitational_tide_mod, arcane_flux_modifier) VALUES (1, 'Vespera', 30, 1.2, 1.3, 1.5)")
+            cursor.execute("INSERT OR IGNORE INTO moons (id, name, period, size_multiplier, gravitational_tide_mod, arcane_flux_modifier) VALUES (2, 'Aetheris', 45, 0.8, 0.7, 2.0)")
+            cursor.execute("INSERT OR IGNORE INTO timeline_events (year, day, title, description, faction_id) VALUES (100, 50, 'The Foundation Stone', 'Sovereigns lay down the boundaries of the capitol.', 1)")
+            cursor.execute("INSERT OR IGNORE INTO timeline_events (year, day, title, description, faction_id) VALUES (200, 150, 'The Sunder War', 'Border margins shatter during the iron ore skirmish.', 2)")
 
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"Error establishing cohesive knowledge database schema: {e}")
+        print(f"Error establishing master knowledge database schema: {e}")
 
 
 # =============================================================================
-# WORKER: Dynamic Folder Ingestor and Dissection Thread
+# HIGH-FIDELITY INTERACTIVE VECTOR MAP CANVAS (W/ DIRECT RE-ROUTING BINDS)
 # =============================================================================
-class KnowledgeIngestorWorker(QThread):
-    progress_update = pyqtSignal(int, int, str) # current, total, filename
-    dissection_complete = pyqtSignal(list) # list of extracted entity nodes
+class InteractiveLordsmithMapCanvas(QWidget):
+    cell_hovered = pyqtSignal(int, int, str, str) # id, h, biome, faction
+    cell_clicked = pyqtSignal(int) # clicked cell index
 
-    def __init__(self, file_paths, db_path, vault_dir):
+    def __init__(self, main_window, parent=None):
+        super().__init__(parent)
+        self.main_window = main_window
+        self.setMinimumSize(400, 400)
+        self.setMouseTracking(True)
+        self.active_layer = "States"
+        self.hovered_cell_idx = -1
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor("#09090d"))
+
+        engine = self.main_window.map_engine
+        if not getattr(engine, 'cells', None):
+            painter.setPen(QColor("#a0a0c0"))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "WORLD NOT SYNTHESIZED YET\nIngest notes and resolve AI reconciliation questions.")
+            return
+
+        scale_x = self.width() / 1000.0
+        scale_y = self.height() / 1000.0
+
+        for cell in engine.cells:
+            cid = cell.get("i", 0)
+            cx, cy = int(cell.get("centroid_x", 0) * scale_x), int(cell.get("centroid_y", 0) * scale_y)
+            h = cell.get("h", 20)
+
+            cell_brush = QBrush(QColor("#181825"))
+            if self.active_layer == "States":
+                state_id = cell.get("state", 0)
+                color_hex = "#181825"
+                if state_id > 0 and hasattr(engine, 'states'):
+                    color_hex = next((s["color"] for s in engine.states if s["id"] == state_id), "#181825")
+                cell_brush = QBrush(QColor(color_hex))
+            elif self.active_layer == "Provinces":
+                prov_id = cell.get("province", 0)
+                prov_color = self.main_window.resolve_province_color_from_cache(prov_id)
+                cell_brush = QBrush(QColor(prov_color if prov_color else "#181825"))
+            elif self.active_layer == "Biomes":
+                biome_colors = {
+                    "Rainforest": "#106e2e", "Taiga": "#15803d", "Desert": "#ca8a04", 
+                    "Marine": "#0c4a6e", "Deep Sea": "#082f49", "Tundra": "#38bdf8", "Ice": "#e0f2fe"
+                }
+                cell_brush = QBrush(QColor(biome_colors.get(cell.get("biome", ""), "#1e293b")))
+            else:
+                val = int((h / 100.0) * 180) + 70
+                cell_brush = QBrush(QColor(0, val, val // 2) if h >= 20 else QColor(0, val // 4, val))
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(cell_brush)
+            painter.drawEllipse(cx - 10, cy - 10, 20, 20)
+
+            if cid == self.hovered_cell_idx:
+                painter.setPen(QPen(QColor("#04D361"), 2))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(cx - 12, cy - 12, 24, 24)
+
+    def mouseMoveEvent(self, event):
+        pos = event.position()
+        engine = self.main_window.map_engine
+        if not getattr(engine, 'cells', None): return
+
+        scale_x = self.width() / 1000.0
+        scale_y = self.height() / 1000.0
+
+        closest_cell = None
+        min_dist = float("inf")
+        for cell in engine.cells:
+            cx, cy = cell.get("centroid_x",0) * scale_x, cell.get("centroid_y",0) * scale_y
+            dist = math.sqrt((pos.x() - cx)**2 + (pos.y() - cy)**2)
+            if dist < min_dist:
+                min_dist = dist
+                closest_cell = cell
+
+        if closest_cell and min_dist < 30:
+            cid = closest_cell.get("i", 0)
+            if cid != self.hovered_cell_idx:
+                self.hovered_cell_idx = cid
+                faction_name = "Neutral Territory"
+                if closest_cell.get("state", 0) > 0 and hasattr(engine, 'states'):
+                    faction_name = next((s["name"] for s in engine.states if s["id"] == closest_cell["state"]), "Neutral Territory")
+                self.cell_hovered.emit(cid, closest_cell.get("h", 0), closest_cell.get("biome", ""), faction_name)
+                self.update()
+        else:
+            self.hovered_cell_idx = -1
+            self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.hovered_cell_idx != -1:
+            self.cell_clicked.emit(self.hovered_cell_idx)
+
+# =============================================================================
+# WORKSPACE WIDGETS FOR ALL LORDSMITH SECTIONS
+# =============================================================================
+class AzgaarFactionSubsystemWidget(QWidget):
+    def __init__(self, main_window):
         super().__init__()
-        self.file_paths = file_paths
-        self.db_path = db_path
-        self.vault_dir = vault_dir
-
-    def run(self):
-        extracted_nodes = []
-        total_files = len(self.file_paths)
+        self.main_window = main_window
+        self.db_path = main_window.db_path
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("<b>🏳️ Sovereign States & Countries Ledger</b>"))
+        self.table = QTableWidget()
+        self.table.setColumnCount(9)
+        self.table.setHorizontalHeaderLabels(["ID", "Name", "Color", "Gov Type", "Aggress (1-10)", "Trade (1-10)", "Freedom (1-10)", "Magic Stance", "Domain"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setStyleSheet("QTableWidget { background-color: #1a1a24; gridline-color: #29292E; }")
+        self.table.itemSelectionChanged.connect(self.on_table_selection_changed)
+        layout.addWidget(self.table)
+        btn_add = QPushButton("➕ Add Sovereign State")
+        btn_add.clicked.connect(self.add_state)
+        layout.addWidget(btn_add)
         
-        # Categorized directories list on disk
-        categories = ["Characters", "Factions", "Locations", "Cultures", "Religions", "General"]
-        for cat in categories:
-            os.makedirs(os.path.join(self.vault_dir, cat), exist_ok=True)
-
-        for idx, file_path in enumerate(self.file_paths):
-            filename = os.path.basename(file_path)
-            self.progress_update.emit(idx + 1, total_files, filename)
-            
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    raw_text = f.read()
-
-                # Dissect unstructured text into template metadata payload
-                dissected = self.dissect_narrative_text(filename, raw_text)
-                extracted_nodes.append(dissected)
-
-                # Commit extracted nodes straight to SQL tables
-                self.commit_dissected_lore_to_db(dissected, raw_text)
-
-                # Write sorted file cleanly to its structured folder vault
-                target_cat = dissected["category"]
-                dest_path = os.path.join(self.vault_dir, target_cat, filename)
-                with open(dest_path, "w", encoding="utf-8") as dest_f:
-                    dest_f.write(raw_text)
-
-            except Exception as e:
-                print(f"Failed to ingest file '{filename}': {e}")
-            
-            self.msleep(100)
-
-        self.dissection_complete.emit(extracted_nodes)
-
-    def dissect_narrative_text(self, filename, text):
-        """Dynamic heuristic dissection engine mapping paragraphs to SQL schemas."""
-        title = os.path.splitext(filename)[0]
-        lower_text = text.lower()
-
-        # Dynamic template category clustering
-        category = "General"
-        if any(kw in lower_text for kw in ["character", "hero", "lord", "lady", "enzo"]):
-            category = "Characters"
-        elif any(kw in lower_text for kw in ["empire", "hegemony", "faction", "concord", "state"]):
-            category = "Factions"
-        elif any(kw in lower_text for kw in ["culture", "tribe", "species", "elven", "moray"]):
-            category = "Cultures"
-        elif any(kw in lower_text for kw in ["worship", "temple", "deity", "pantheon", "religion"]):
-            category = "Religions"
-        elif any(kw in lower_text for kw in ["citadel", "city", "keep", "island", "wastes", "location"]):
-            category = "Locations"
-
-        dissected_payload = {
-            "title": title,
-            "category": category,
-            "entities": []
-        }
-
-        # Structure entities from text
-        entity_name = title.replace("_", " ").title()
-        if category == "Factions":
-            color = random.choice(["#ef4444", "#3b82f6", "#10b981", "#eab308", "#8b5cf6"])
-            dissected_payload["entities"].append({
-                "type": "faction",
-                "name": entity_name,
-                "color": color,
-                "expansionism": round(random.uniform(0.8, 1.6), 2),
-                "treasury": round(random.uniform(2500.0, 7500.0), 2)
-            })
-        elif category == "Religions":
-            deity = "Dawnbringer Solis" if "dawn" in lower_text else "High Wyrm"
-            dissected_payload["entities"].append({
-                "type": "religion",
-                "name": entity_name,
-                "color": random.choice(["#eab308", "#a855f7", "#ec4899"]),
-                "supreme_deity": deity
-            })
-        elif category == "Cultures":
-            code = "".join([w[0].upper() for w in entity_name.split() if w])[:3]
-            dissected_payload["entities"].append({
-                "type": "culture",
-                "name": entity_name,
-                "code": code if code else "CL"
-            })
-        elif category == "Locations":
-            dissected_payload["entities"].append({
-                "type": "settlement",
-                "name": entity_name,
-                "population": round(random.uniform(8.0, 30.0), 1),
-                "cell_idx": random.randint(1, 1000)
-            })
-
-        return dissected_payload
-
-    def commit_dissected_lore_to_db(self, dissected, original_text):
+    def refresh_grid(self):
+        self.table.blockSignals(True)
+        self.table.setRowCount(0)
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
-            # Save the primary note entry
-            cursor.execute("""
-                INSERT INTO notes (title, content, category)
-                VALUES (?, ?, ?)
-                ON CONFLICT(title) DO UPDATE SET content=excluded.content, category=excluded.category
-            """, (dissected["title"], original_text, dissected["category"]))
-            
-            note_id = cursor.lastrowid if cursor.lastrowid else 1
-            
-            # Populate our structured template fields using Foreign Key links
-            for ent in dissected["entities"]:
-                ent_type = ent["type"]
-                if ent_type == "faction":
-                    cursor.execute("""
-                        INSERT INTO factions (name, color, expansionism, treasury, associated_note_id)
-                        VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(name) DO UPDATE SET color=excluded.color, expansionism=excluded.expansionism
-                    """, (ent["name"], ent["color"], ent["expansionism"], ent["treasury"], note_id))
-                elif ent_type == "religion":
-                    cursor.execute("""
-                        INSERT INTO religions (name, color, supreme_deity, associated_note_id)
-                        VALUES (?, ?, ?, ?)
-                        ON CONFLICT(name) DO UPDATE SET supreme_deity=excluded.supreme_deity
-                    """, (ent["name"], ent["color"], ent["supreme_deity"], note_id))
-                elif ent_type == "culture":
-                    cursor.execute("""
-                        INSERT INTO cultures (name, code, associated_note_id)
-                        VALUES (?, ?, ?)
-                        ON CONFLICT(name) DO UPDATE SET code=excluded.code
-                    """, (ent["name"], ent["code"], note_id))
-                elif ent_type == "settlement":
-                    cursor.execute("""
-                        INSERT INTO settlements (name, population, cell_idx, associated_note_id)
-                        VALUES (?, ?, ?, ?)
-                    """, (ent["name"], ent["population"], ent["cell_idx"], note_id))
+            cursor.execute("SELECT id, name, color, gov_type, aggression_scale, trade_scale, freedom, magic_stance, domain_type FROM factions")
+            rows = cursor.fetchall()
+            conn.close()
+            self.table.setRowCount(len(rows))
+            for r_idx, (fid, name, color, gov, agg, trd, free, magic, dom) in enumerate(rows):
+                self.table.setItem(r_idx, 0, QTableWidgetItem(str(fid)))
+                self.table.setItem(r_idx, 1, QTableWidgetItem(name))
+                color_btn = QPushButton()
+                color_btn.setFixedSize(24, 20)
+                color_btn.setStyleSheet(f"background-color: {color}; border: 1px solid #fff;")
+                color_btn.clicked.connect(lambda _, r=r_idx, s=fid: self.pick_color(r, s))
+                self.table.setCellWidget(r_idx, 2, color_btn)
+                self.table.setItem(r_idx, 3, QTableWidgetItem(str(gov)))
+                self.table.setItem(r_idx, 4, QTableWidgetItem(str(agg)))
+                self.table.setItem(r_idx, 5, QTableWidgetItem(str(trd)))
+                self.table.setItem(r_idx, 6, QTableWidgetItem(str(free)))
+                self.table.setItem(r_idx, 7, QTableWidgetItem(str(magic)))
+                self.table.setItem(r_idx, 8, QTableWidgetItem(str(dom)))
+            self.table.itemChanged.connect(self.handle_edited)
+        except Exception as e:
+            pass
+        self.table.blockSignals(False)
 
+    def handle_edited(self, item):
+        row = item.row()
+        fid = int(self.table.item(row, 0).text())
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        if item.column() == 1:
+            cursor.execute("UPDATE factions SET name = ? WHERE id = ?", (item.text(), fid))
+        elif item.column() == 3:
+            cursor.execute("UPDATE factions SET gov_type = ? WHERE id = ?", (item.text(), fid))
+        conn.commit()
+        conn.close()
+        self.main_window.run_local_lore_reconciliation()
+
+    def pick_color(self, row, fid):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE factions SET color = ? WHERE id = ?", (color.name(), fid))
             conn.commit()
             conn.close()
+            self.refresh_grid()
+            self.main_window.map_viewer_canvas.update()
+
+    def add_state(self):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        new_id = random.randint(100, 9999)
+        hex_color = f"#{random.randint(0, 0xFFFFFF):06x}"
+        cursor.execute("INSERT INTO factions (id, name, color, gov_type, aggression_scale, trade_scale, freedom, magic_stance, domain_type) VALUES (?, ?, ?, 'Feudal Kingdom', 5, 5, 5, 'Regulated', 'Both')", (new_id, f"State_{new_id}", hex_color))
+        conn.commit()
+        conn.close()
+        self.refresh_grid()
+        self.main_window.run_local_lore_reconciliation()
+
+    def on_table_selection_changed(self):
+        ranges = self.table.selectedRanges()
+        if not ranges: return
+        row = ranges[0].topRow()
+        fid = int(self.table.item(row, 0).text())
+        self.main_window.update_parameter_inspector("factions", fid)
+
+class AzgaarProvinceSubsystemWidget(QWidget):
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+        self.db_path = main_window.db_path
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("<b>🛡️ Internal State Provinces</b>"))
+        self.table = QTableWidget()
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(["ID", "Province Name", "Color", "Governor", "Local Morale", "Magic Handling"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setStyleSheet("QTableWidget { background-color: #1a1a24; }")
+        self.table.itemSelectionChanged.connect(self.on_table_selection_changed)
+        layout.addWidget(self.table)
+        btn_add = QPushButton("➕ Add State Province")
+        btn_add.clicked.connect(self.add_province)
+        layout.addWidget(btn_add)
+        
+    def refresh_grid(self):
+        self.table.blockSignals(True)
+        self.table.setRowCount(0)
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, color, governor_name, local_morale, local_magic_handling FROM provinces")
+            rows = cursor.fetchall()
+            conn.close()
+            self.table.setRowCount(len(rows))
+            for r_idx, (pid, name, color, gov, morale, magic) in enumerate(rows):
+                self.table.setItem(r_idx, 0, QTableWidgetItem(str(pid)))
+                self.table.setItem(r_idx, 1, QTableWidgetItem(name))
+                color_btn = QPushButton()
+                color_btn.setFixedSize(24, 20)
+                color_btn.setStyleSheet(f"background-color: {color}; border: 1px solid #fff;")
+                color_btn.clicked.connect(lambda _, r=r_idx, p=pid: self.pick_color(r, p))
+                self.table.setCellWidget(r_idx, 2, color_btn)
+                self.table.setItem(r_idx, 3, QTableWidgetItem(str(gov if gov else "Vacant")))
+                self.table.setItem(r_idx, 4, QTableWidgetItem(str(morale)))
+                self.table.setItem(r_idx, 5, QTableWidgetItem(str(magic)))
         except Exception as e:
-            print(f"Error committing dissected note rows to SQLite: {e}")
+            pass
+        self.table.blockSignals(False)
+
+    def pick_color(self, row, pid):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE provinces SET color = ? WHERE id = ?", (color.name(), pid))
+            conn.commit()
+            conn.close()
+            self.refresh_grid()
+            self.main_window.map_viewer_canvas.update()
+
+    def add_province(self):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        new_id = random.randint(100, 9999)
+        hex_color = f"#{random.randint(0, 0xFFFFFF):06x}"
+        cursor.execute("INSERT INTO provinces (id, name, color, state_id, governor_name, local_morale, local_magic_handling) VALUES (?, ?, ?, 1, 'Noble Governor', 5, 'Lax Enforcement')", (new_id, f"Province_{new_id}", hex_color))
+        conn.commit()
+        conn.close()
+        self.refresh_grid()
+        self.main_window.run_local_lore_reconciliation()
+
+    def on_table_selection_changed(self):
+        ranges = self.table.selectedRanges()
+        if not ranges: return
+        row = ranges[0].topRow()
+        pid = int(self.table.item(row, 0).text())
+        self.main_window.update_parameter_inspector("provinces", pid)
+
+
+class AzgaarReligionSubsystemWidget(QWidget):
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+        self.db_path = main_window.db_path
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("<b>✨ Religions Matrix</b>"))
+        self.table = QTableWidget()
+        self.table.setColumnCount(8)
+        self.table.setHorizontalHeaderLabels(["ID", "Name", "Type", "Official", "Devotion", "Recruit Rate", "Supreme Deity", "Domain"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setStyleSheet("QTableWidget { background-color: #1a1a24; }")
+        self.table.itemSelectionChanged.connect(self.on_table_selection_changed)
+        layout.addWidget(self.table)
+        btn_add = QPushButton("➕ Instate New Religion")
+        btn_add.clicked.connect(self.add_religion)
+        layout.addWidget(btn_add)
+
+    def refresh_grid(self):
+        self.table.blockSignals(True)
+        self.table.setRowCount(0)
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, religion_type, is_official, devotion, recruit_rate, supreme_deity, domain_type FROM religions")
+            rows = cursor.fetchall()
+            conn.close()
+            self.table.setRowCount(len(rows))
+            for r_idx, (rid, name, rel_type, official, devotion, recruit, deity, domain) in enumerate(rows):
+                self.table.setItem(r_idx, 0, QTableWidgetItem(str(rid)))
+                self.table.setItem(r_idx, 1, QTableWidgetItem(name))
+                self.table.setItem(r_idx, 2, QTableWidgetItem(str(rel_type)))
+                self.table.setItem(r_idx, 3, QTableWidgetItem("Yes" if official else "No"))
+                self.table.setItem(r_idx, 4, QTableWidgetItem(str(devotion)))
+                self.table.setItem(r_idx, 5, QTableWidgetItem(str(recruit)))
+                self.table.setItem(r_idx, 6, QTableWidgetItem(str(deity)))
+                self.table.setItem(r_idx, 7, QTableWidgetItem(str(domain)))
+        except Exception as e: pass
+        self.table.blockSignals(False)
+
+    def add_religion(self):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        new_id = random.randint(100, 9999)
+        cursor.execute("INSERT INTO religions (id, name, color, religion_type, devotion, recruit_rate, supreme_deity, domain_type) VALUES (?, ?, '#ffd700', 'Deity-Centric', 5, 5, 'Sun God', 'Both')", (new_id, f"Creed_{new_id}"))
+        conn.commit()
+        conn.close()
+        self.refresh_grid()
+        self.main_window.run_local_lore_reconciliation()
+
+    def on_table_selection_changed(self):
+        ranges = self.table.selectedRanges()
+        if not ranges: return
+        row = ranges[0].topRow()
+        rid = int(self.table.item(row, 0).text())
+        self.main_window.update_parameter_inspector("religions", rid)
+
+
+class AzgaarCultureSubsystemWidget(QWidget):
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+        self.db_path = main_window.db_path
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("<b>🌐 Cultures & Species Registry</b>"))
+        self.table = QTableWidget()
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(["ID", "Name", "Lang Code", "Primary Syllables", "Trait", "Domain"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setStyleSheet("QTableWidget { background-color: #1a1a24; }")
+        self.table.itemSelectionChanged.connect(self.on_table_selection_changed)
+        layout.addWidget(self.table)
+        btn_add = QPushButton("➕ Seed New Culture")
+        btn_add.clicked.connect(self.add_culture)
+        layout.addWidget(btn_add)
+
+    def refresh_grid(self):
+        self.table.blockSignals(True)
+        self.table.setRowCount(0)
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, code, language_base, trait_type, domain_type FROM cultures")
+            rows = cursor.fetchall()
+            conn.close()
+            self.table.setRowCount(len(rows))
+            for r_idx, (cid, name, code, lang, trait, domain) in enumerate(rows):
+                self.table.setItem(r_idx, 0, QTableWidgetItem(str(cid)))
+                self.table.setItem(r_idx, 1, QTableWidgetItem(name))
+                self.table.setItem(r_idx, 2, QTableWidgetItem(str(code)))
+                self.table.setItem(r_idx, 3, QTableWidgetItem(str(lang)))
+                self.table.setItem(r_idx, 4, QTableWidgetItem(str(trait)))
+                self.table.setItem(r_idx, 5, QTableWidgetItem(str(domain)))
+        except Exception as e: pass
+        self.table.blockSignals(False)
+
+    def add_culture(self):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        new_id = random.randint(100, 9999)
+        cursor.execute("INSERT INTO cultures (id, name, code, language_base, trait_type, trait_modifier, domain_type) VALUES (?, ?, 'CUL', 'Common', 'Income Boost', 1.10, 'Both')", (new_id, f"Culture_{new_id}"))
+        conn.commit()
+        conn.close()
+        self.refresh_grid()
+
+    def on_table_selection_changed(self):
+        ranges = self.table.selectedRanges()
+        if not ranges: return
+        row = ranges[0].topRow()
+        cid = int(self.table.item(row, 0).text())
+        self.main_window.update_parameter_inspector("cultures", cid)
+
+
+class AzgaarGenericSubsystemWidget(QWidget):
+    """Generic catch-all grid for the remaining tables to prevent boilerplate."""
+    def __init__(self, main_window, table_name, title, columns):
+        super().__init__()
+        self.main_window = main_window
+        self.db_path = main_window.db_path
+        self.table_name = table_name
+        self.columns = columns
+        
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(f"<b>{title}</b>"))
+        self.table = QTableWidget()
+        self.table.setColumnCount(len(columns))
+        self.table.setHorizontalHeaderLabels([c.upper() for c in columns])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setStyleSheet("QTableWidget { background-color: #1a1a24; }")
+        self.table.itemSelectionChanged.connect(self.on_table_selection_changed)
+        layout.addWidget(self.table)
+        
+    def refresh_grid(self):
+        self.table.blockSignals(True)
+        self.table.setRowCount(0)
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT {','.join(self.columns)} FROM {self.table_name}")
+            rows = cursor.fetchall()
+            conn.close()
+            self.table.setRowCount(len(rows))
+            for r_idx, row_data in enumerate(rows):
+                for c_idx, val in enumerate(row_data):
+                    self.table.setItem(r_idx, c_idx, QTableWidgetItem(str(val) if val is not None else ""))
+        except Exception as e: pass
+        self.table.blockSignals(False)
+
+    def on_table_selection_changed(self):
+        ranges = self.table.selectedRanges()
+        if not ranges: return
+        row = ranges[0].topRow()
+        item_id = self.table.item(row, 0).text()
+        self.main_window.update_parameter_inspector(self.table_name, item_id)
 
 
 # =============================================================================
-# PROMPT DIALOG: STARTUP PROJECT WIZARD
+# PROJECT STARTUP WIZARD
 # =============================================================================
 class ProjectStartupWizard(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.selected_dir = None
-        self.setWindowTitle("Lordsmith Studio Startup Wizard")
+        self.setWindowTitle("Lordsmith Studio Startup")
         self.resize(460, 240)
         self.setStyleSheet("background-color: #111116; color: #EEEEF8; font-family: Arial;")
-
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("<h2>🌌 Welcome to Lordsmith Studio</h2>"))
-        layout.addWidget(QLabel("Select an existing project workspace database or start fresh."))
-        
         btn_new = QPushButton("🎲 Create Fresh Workspace")
-        btn_new.setStyleSheet("background-color: #04D361; color: black; font-weight: bold; padding: 10px; font-size: 13px;")
         btn_new.clicked.connect(self.action_new_project)
-
-        btn_load = QPushButton("📂 Open Existing Project (.db)")
-        btn_load.clicked.connect(self.action_load_project)
-
         layout.addWidget(btn_new)
-        layout.addWidget(btn_load)
-        layout.addStretch()
 
     def action_new_project(self):
         dir_path = QFileDialog.getExistingDirectory(self, "Select Project Folder Directory")
@@ -383,711 +526,154 @@ class ProjectStartupWizard(QDialog):
             self.selected_dir = dir_path
             self.accept()
 
-    def action_load_project(self):
-        db_file, _ = QFileDialog.getOpenFileName(self, "Load SQLite Database File", "", "Databases (*.db)")
-        if db_file:
-            self.selected_dir = os.path.dirname(db_file)
-            self.accept()
-
-
 # =============================================================================
-# MAIN WINDOW: Symmetrical Three-Panel Workspace
+# MAIN WINDOW ARCHITECTURE
 # =============================================================================
 class LordsmithStudioMainWindow(QMainWindow):
     def __init__(self, project_dir):
         super().__init__()
         self.project_dir = os.path.abspath(project_dir)
-        project_name = os.path.basename(self.project_dir)
-        self.setWindowTitle(f"Lordsmith Studio Workspace - {project_name}")
+        self.setWindowTitle("Lordsmith Studio Workspace")
         self.resize(1650, 950)
-        self.setStyleSheet("background-color: #111116; color: #EEEEF8;")
-
-        # Active Data Environment definitions
+        self.setStyleSheet("background-color: #111116; color: #EEEEF8; QLineEdit, QTextEdit, QTableWidget { background-color: #1a1a24; border: 1px solid #333333; } QPushButton { background-color: #29293a; padding: 5px; }")
+        
         self.db_path = os.path.join(self.project_dir, "lore_forge_world.db")
-        setup_cohesive_knowledge_db(self.db_path)
-
-        # Prebuilt map generator engines
+        # Ensure fresh run if schema gets borked during sandbox testing
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+        setup_master_knowledge_db(self.db_path)
         self.map_engine = AzgaarEngine()
-        self.active_question_queue = []
-        self.active_question_index = 0
-        self.selected_note_id = None
-        self.selected_note_title = None
 
-        self._apply_symmetrical_stylesheet()
-        self._build_classic_menubar()
-
-        # --- Base Layout Construction ---
         central_container = QWidget()
         self.setCentralWidget(central_container)
         main_h_layout = QHBoxLayout(central_container)
-        main_h_layout.setContentsMargins(0, 0, 0, 0)
-        main_h_layout.setSpacing(0)
 
-        # 1. Left Narrow File Browser Panel
-        self.browser_frame = QWidget()
-        self.browser_frame.setFixedWidth(240)
-        self.browser_frame.setStyleSheet("background-color: #14141d; border-right: 1px solid #29292E;")
-        browser_layout = QVBoxLayout(self.browser_frame)
-        browser_layout.setContentsMargins(4, 8, 4, 8)
-        
-        self.lbl_browser_title = QLabel("<b>📂 LORE VAULT STRUCTURE</b>")
-        self.file_model = QFileSystemModel()
-        self.file_model.setRootPath(self.get_vault_dir())
-        
-        self.file_tree = QTreeView()
-        self.file_tree.setModel(self.file_model)
-        self.file_tree.setRootIndex(self.file_model.index(self.get_vault_dir()))
-        self.file_tree.setColumnHidden(1, True)
-        self.file_tree.setColumnHidden(2, True)
-        self.file_tree.setColumnHidden(3, True)
-        self.file_tree.setHeaderHidden(True)
-        self.file_tree.clicked.connect(self.on_file_browser_node_clicked)
-
-        browser_layout.addWidget(self.lbl_browser_title)
-        browser_layout.addWidget(self.file_tree)
-        main_h_layout.addWidget(self.browser_frame)
-
-        # 2. Main Double Splitter Grid (Houses the 3 Panels + Ingestion Screen + Bottom Chat)
-        self.grid_splitter = QSplitter(Qt.Orientation.Vertical)
-        self.grid_splitter.setStyleSheet("QSplitter::handle { background: #29292E; height: 3px; }")
-        main_h_layout.addWidget(self.grid_splitter, 1)
-
-        # Top Splitter: 3 Horizontal Panels
-        self.top_panels_widget = QWidget()
-        self.top_panels_layout = QHBoxLayout(self.top_panels_widget)
-        self.top_panels_layout.setContentsMargins(0, 0, 0, 0)
-        self.top_panels_layout.setSpacing(0)
-        
         self.panels_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.panels_splitter.setStyleSheet("QSplitter::handle { background: #29292E; width: 3px; }")
-        self.top_panels_layout.addWidget(self.panels_splitter)
-        
-        self.grid_splitter.addWidget(self.top_panels_widget)
+        main_h_layout.addWidget(self.panels_splitter)
 
-        # PANEL 1 (LEFT): Narrative Note Writer Editor
+        # Left panel: Note editor
         self.panel_left = QWidget()
-        self.panel_left.setStyleSheet("background-color: #111116; border-right: 1px solid #29292E;")
         pl_lay = QVBoxLayout(self.panel_left)
-        pl_lay.setContentsMargins(6, 6, 6, 6)
-        
-        self.txt_note_title = QLineEdit()
-        self.txt_note_title.setPlaceholderText("Narrative Source Document Title...")
-        self.btn_save_note = QPushButton("💾 Save Local Document")
-        self.btn_save_note.setStyleSheet("background-color: #04D361; color: black; font-weight: bold;")
-        self.btn_save_note.clicked.connect(self.save_active_note_content)
-        
-        self.note_writer = MarkdownNotebookEditor(self)
-        
         pl_lay.addWidget(QLabel("<b>✍️ Narrative Lore Writer</b>"))
-        pl_lay.addWidget(self.txt_note_title)
+        self.note_writer = QTextEdit()
         pl_lay.addWidget(self.note_writer, 1)
-        pl_lay.addWidget(self.btn_save_note)
         self.panels_splitter.addWidget(self.panel_left)
 
-        # PANEL 2 (MIDDLE): Active Grid Table Viewer
+        # Middle panel: Subsystem Registry Stack
         self.panel_middle = QWidget()
-        self.panel_middle.setStyleSheet("background-color: #111116; border-right: 1px solid #29292E;")
         pm_lay = QVBoxLayout(self.panel_middle)
-        pm_lay.setContentsMargins(6, 6, 6, 6)
-        
-        self.middle_table = QTableWidget()
-        self.middle_table.setColumnCount(3)
-        self.middle_table.setHorizontalHeaderLabels(["ID", "Name", "Properties"])
-        self.middle_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.middle_table.setStyleSheet("QTableWidget { background-color: #16161f; }")
-        self.middle_table.itemSelectionChanged.connect(self.on_middle_table_selection_changed)
-
-        pm_lay.addWidget(QLabel("<b>📋 Structured Database Registry</b>"))
-        pm_lay.addWidget(self.middle_table, 1)
+        self.cb_subject_selector = QComboBox()
+        pm_lay.addWidget(self.cb_subject_selector)
+        self.subsystem_stack = QStackedWidget()
+        pm_lay.addWidget(self.subsystem_stack, 1)
         self.panels_splitter.addWidget(self.panel_middle)
 
-        # PANEL 3 (RIGHT): Detailed Parameter Inspector / Visualization Canvas Drawer
+        # Initialize Subsystem Widgets
+        self.w_factions = AzgaarFactionSubsystemWidget(self)
+        self.w_provinces = AzgaarProvinceSubsystemWidget(self)
+        self.w_religions = AzgaarReligionSubsystemWidget(self)
+        self.w_cultures = AzgaarCultureSubsystemWidget(self)
+        
+        self.subsystems = [
+            ("Sovereign States", self.w_factions),
+            ("Provinces", self.w_provinces),
+            ("Religions", self.w_religions),
+            ("Cultures", self.w_cultures),
+            ("Military Regiments", AzgaarGenericSubsystemWidget(self, "military", "⚔️ Regiments", ["id", "name", "faction_id", "troops_count", "unit_type"])),
+            ("Defensive Structures", AzgaarGenericSubsystemWidget(self, "defensive_structures", "🏰 Defenses", ["id", "name", "structure_type", "defense_value"])),
+            ("Economic Commodities", AzgaarGenericSubsystemWidget(self, "production_goods", "📦 Commodities", ["cell_id", "good", "valuation", "is_market_center"])),
+            ("Trade Routes", AzgaarGenericSubsystemWidget(self, "trade_routes", "🛤️ Routes", ["id", "origin_cell", "destination_cell", "route_type"])),
+            ("Burgs & Settlements", AzgaarGenericSubsystemWidget(self, "settlements", "🏘️ Burgs", ["id", "name", "population", "has_port"])),
+            ("Geography Tectonics", AzgaarGenericSubsystemWidget(self, "geography_plates", "🌍 Plates", ["id", "name", "movement_vector"])),
+            ("Magic Leylines", AzgaarGenericSubsystemWidget(self, "magic_layers", "✨ Magic", ["id", "label", "mode_type", "intensity"])),
+            ("Tech Eras", AzgaarGenericSubsystemWidget(self, "tech_eras", "⚙️ Tech", ["id", "name", "year_range"])),
+            ("Influence Factions", AzgaarGenericSubsystemWidget(self, "influence_factions", "🕸️ Shadow Network", ["id", "name", "category", "influence_intensity"])),
+            ("Calendar Rules", AzgaarGenericSubsystemWidget(self, "calendar_config", "📅 Calendar", ["id", "year_length"])),
+            ("Planetary Moons", AzgaarGenericSubsystemWidget(self, "moons", "🌘 Moons", ["id", "name", "period", "gravitational_tide_mod"])),
+            ("Timeline Events", AzgaarGenericSubsystemWidget(self, "timeline_events", "📜 Historical Events", ["id", "year", "title", "faction_id"])),
+            ("Markers", AzgaarGenericSubsystemWidget(self, "markers", "📍 Markers", ["id", "name", "type"]))
+        ]
+        
+        for name, widget in self.subsystems:
+            self.cb_subject_selector.addItem(name)
+            self.subsystem_stack.addWidget(widget)
+            
+        self.cb_subject_selector.currentIndexChanged.connect(self.on_subject_changed)
+        
+        # Right Panel: Inspector and Interactive Canvas
         self.panel_right = QWidget()
-        self.panel_right.setStyleSheet("background-color: #111116;")
         pr_lay = QVBoxLayout(self.panel_right)
-        pr_lay.setContentsMargins(6, 6, 6, 6)
         
-        self.inspector_stack = QStackedWidget()
+        self.btn_toggle_map = QPushButton("👁️ Show Interactive Canvas")
+        self.btn_toggle_map.setCheckable(True)
+        self.btn_toggle_map.clicked.connect(self.toggle_map_view)
+        pr_lay.addWidget(self.btn_toggle_map)
         
-        # Form Sub-Panel View (Data Controls)
+        self.right_stack = QStackedWidget()
         self.form_widget = QScrollArea()
         self.form_widget.setWidgetResizable(True)
         self.form_inner = QWidget()
         self.form_layout = QFormLayout(self.form_inner)
         self.form_widget.setWidget(self.form_inner)
-        self.inspector_stack.addWidget(self.form_widget)
+        self.right_stack.addWidget(self.form_widget)
         
-        # Interactive Map Sub-Panel View
-        self.map_viewer_widget = MapViewerWidget(self)
-        self.inspector_stack.addWidget(self.map_viewer_widget)
-
-        pr_lay.addWidget(QLabel("<b>⚙️ Parameter Inspector &amp; Canvas View</b>"))
-        pr_lay.addWidget(self.inspector_stack, 1)
+        self.map_viewer_canvas = InteractiveLordsmithMapCanvas(self)
+        self.right_stack.addWidget(self.map_viewer_canvas)
+        pr_lay.addWidget(self.right_stack, 1)
+        
         self.panels_splitter.addWidget(self.panel_right)
-
-        # 3. Bottom Panel (Persistent wide-screen chat interface)
-        self.bottom_chat_panel = QWidget()
-        self.bottom_chat_panel.setStyleSheet("background-color: #14141d; border-top: 1px solid #29292E;")
-        self.bottom_chat_panel.setFixedHeight(240)
-        chat_layout = QVBoxLayout(self.bottom_chat_panel)
-        chat_layout.setContentsMargins(8, 8, 8, 8)
         
-        self.chat_history = QTextEdit()
-        self.chat_history.setReadOnly(True)
-        self.chat_history.setStyleSheet("background-color: #0d0d12; border: 1px solid #29292E; color: #EEEEF8;")
-        
-        self.chat_input_layout = QHBoxLayout()
-        self.txt_chat_prompt = QLineEdit()
-        self.txt_chat_prompt.setPlaceholderText("Answer the AI's question, clarify detail discrepancies, or command progress...")
-        self.txt_chat_prompt.returnPressed.connect(self.send_chat_message_to_reconciler)
-        
-        self.btn_send_chat = QPushButton("➤ Send")
-        self.btn_send_chat.clicked.connect(self.send_chat_message_to_reconciler)
-        self.chat_input_layout.addWidget(self.txt_chat_prompt, 1)
-        self.chat_input_layout.addWidget(self.btn_send_chat)
+        self.on_subject_changed(0)
 
-        self.btn_generate_map_synthesis = QPushButton("🎲 SYNTHESIZE LORE MAP")
-        self.btn_generate_map_synthesis.setStyleSheet("background-color: #04D361; color: black; font-weight: bold; font-size: 13px; min-width: 200px;")
-        self.btn_generate_map_synthesis.clicked.connect(self.trigger_map_synthesis_pipeline)
-        self.btn_generate_map_synthesis.setEnabled(False) # Locked on startup until database constraints clear
-        self.chat_input_layout.addWidget(self.btn_generate_map_synthesis)
+    def on_subject_changed(self, index):
+        self.subsystem_stack.setCurrentIndex(index)
+        widget = self.subsystem_stack.widget(index)
+        if hasattr(widget, 'refresh_grid'):
+            widget.refresh_grid()
 
-        chat_layout.addWidget(QLabel("<b>🤖 Local AI Inconsistency Analyst &amp; Interviewer</b>"))
-        chat_layout.addWidget(self.chat_history, 1)
-        chat_layout.addLayout(self.chat_input_layout)
-
-        self.grid_splitter.addWidget(self.bottom_chat_panel)
-
-        # 4. Standard Bottom Status Strip
-        self.statusBar = QStatusBar()
-        self.setStatusBar(self.statusBar)
-        self.statusBar.showMessage("Studio ready. Ingest a folder of notes to begin analysis.")
-
-        # Trigger Standby state if database is empty
-        self.evaluate_ingestion_standby_state()
-
-    def get_vault_dir(self):
-        vault = os.path.join(self.project_dir, "lore")
-        if not os.path.exists(vault):
-            os.makedirs(vault)
-        return vault
-
-    def evaluate_ingestion_standby_state(self):
-        """Verifies if the database is populated. If empty, forces note import dialogue."""
+    def resolve_province_color_from_cache(self, prov_id):
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM notes")
-            notes_count = cursor.fetchone()[0]
+            cursor.execute("SELECT color FROM provinces WHERE id=?", (prov_id,))
+            res = cursor.fetchone()
             conn.close()
-            
-            if notes_count == 0:
-                self.chat_history.append(
-                    "<b>[AI Interviewer]</b> Hello! I detected a fresh workspace without any lore documentation.<br>"
-                    "To begin, please select <b>Imports -> Ingest Note Directory Folder</b> from the menu bar to import your raw text notes."
-                )
-                self.btn_generate_map_synthesis.setEnabled(False)
-            else:
-                self.run_local_lore_reconciliation()
-        except Exception as e:
-            print(f"Error checking vault status: {e}")
+            if res: return res[0]
+        except: pass
+        return None
 
-    def _apply_symmetrical_stylesheet(self):
-        self.setStyleSheet("""
-            QMainWindow { background-color: #111116; }
-            QWidget { color: #EEEEF8; font-family: "Segoe UI", Arial, sans-serif; }
-            QTreeView { background-color: #14141d; border: none; }
-            QTreeView::item:selected { background-color: #29293a; color: #04D361; }
-            QLineEdit { background-color: #1a1a24; border: 1px solid #333333; padding: 4px; border-radius: 3px; }
-            QPushButton { background-color: #29293a; border: 1px solid #404060; padding: 5px; border-radius: 4px; }
-            QPushButton:hover { background-color: #3b3b54; }
-            QScrollArea { border: none; }
-            QTableWidget { gridline-color: #29292E; border: none; }
-            QTableWidget::item:selected { background-color: #29293a; }
-        """)
-
-    def _build_classic_menubar(self):
-        """Assembles native classic horizontal top menu layout options."""
-        menu_bar = self.menuBar()
-        menu_bar.setStyleSheet("""
-            QMenuBar { background-color: #16161c; color: #EEEEF8; border-bottom: 1px solid #29292E; }
-            QMenuBar::item:selected { background-color: #29293a; color: #04D361; }
-            QMenu { background-color: #1e1e2c; color: #EEEEF8; border: 1px solid #404060; }
-            QMenu::item:selected { background-color: #29293a; color: #04D361; }
-        """)
-        
-        file_menu = menu_bar.addMenu("&File")
-        file_menu.addAction("🎲 Synthesize Map Layer Layout", self.trigger_map_synthesis_pipeline)
-        file_menu.addSeparator()
-        file_menu.addAction("Exit Studio", self.close)
-
-        import_menu = menu_bar.addMenu("&Imports")
-        import_menu.addAction("📁 Ingest Note Directory Folder", self.import_external_folder_dissection)
-
-    def import_external_folder_dissection(self):
-        """Launches directory selector and fires ingestion worker thread."""
-        d = QFileDialog.getExistingDirectory(self, "Select Unstructured Notes Folder")
-        if d:
-            file_list = [os.path.join(d, f) for f in os.listdir(d) if f.endswith(('.md', '.txt'))]
-            if not file_list:
-                QMessageBox.warning(self, "No files found", "No markdown (.md) or text (.txt) files found in that directory.")
-                return
-
-            # Display ingestion loading HUD
-            self.loading_dialog = QDialog(self)
-            self.loading_dialog.setWindowTitle("Parsing World Lore Files...")
-            self.loading_dialog.resize(400, 120)
-            ld_lay = QVBoxLayout(self.loading_dialog)
-            
-            self.lbl_loading_info = QLabel("Starting extraction...")
-            self.progress_bar = QProgressBar()
-            self.progress_bar.setRange(0, len(file_list))
-            
-            ld_lay.addWidget(self.lbl_loading_info)
-            ld_lay.addWidget(self.progress_bar)
-            self.loading_dialog.show()
-
-            self.worker = KnowledgeIngestorWorker(file_list, self.db_path, self.get_vault_dir())
-            self.worker.progress_update.connect(self.on_ingestion_progress)
-            self.worker.dissection_complete.connect(self.on_ingestion_complete)
-            self.worker.start()
-
-    def on_ingestion_progress(self, current, total, filename):
-        self.progress_bar.setValue(current)
-        self.lbl_loading_info.setText(f"Dissecting {current}/{total}: {filename}...")
-
-    def on_ingestion_complete(self, extracted_nodes):
-        self.loading_dialog.accept()
-        self.file_model.setRootPath(self.get_vault_dir())
-        self.file_tree.setRootIndex(self.file_model.index(self.get_vault_dir()))
-        self.statusBar.showMessage("Lore imported and structured successfully.")
-        
-        self.chat_history.clear()
-        self.chat_history.append(
-            "<b>[AI Interviewer]</b> Ingestion complete! I have finished analyzing your raw note vault "
-            "and successfully parsed your lore documents into organized categories.<br>"
-            "Running a local consistency audit on the database now..."
-        )
-        
-        self.run_local_lore_reconciliation()
-
-    # =============================================================================
-    # RECONCILIATION ENGINE & ACTIVE INTERVIEW QUEUE
-    # =============================================================================
     def run_local_lore_reconciliation(self):
-        """Scans SQLite tables for relational inconsistencies and populates the interview loop."""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Clear old inconsistencies
-            cursor.execute("DELETE FROM inconsistencies")
-            
-            self.active_question_queue = []
-            
-            # Check 1: Factions without defined starting capitals
-            cursor.execute("SELECT id, name FROM factions WHERE capital_cell IS NULL")
-            for fid, name in cursor.fetchall():
-                desc = f"The Faction '{name}' does not have a designated spatial capital city or coordinate region assigned."
-                cursor.execute("INSERT INTO inconsistencies (subject_type, subject_id, description) VALUES ('Faction', ?, ?)", (fid, desc))
-                self.active_question_queue.append({
-                    "type": "Faction",
-                    "id": fid,
-                    "name": name,
-                    "field": "capital_cell",
-                    "question": f"Where is the capital of the **{name}** situated geographically? Provide a coordinates zone or nearby landmark."
-                })
-                
-            # Check 2: Settlements without controlling factions
-            cursor.execute("SELECT id, name FROM settlements WHERE faction_id IS NULL")
-            for sid, name in cursor.fetchall():
-                desc = f"The Settlement '{name}' lacks a declared governing state body or political affiliation."
-                cursor.execute("INSERT INTO inconsistencies (subject_type, subject_id, description) VALUES ('Settlement', ?, ?)", (sid, desc))
-                self.active_question_queue.append({
-                    "type": "Settlement",
-                    "id": sid,
-                    "name": name,
-                    "field": "faction_id",
-                    "question": f"Which sovereign faction actively claims dominion over the burg of **{name}**?"
-                })
-
-            # Check 3: Religions without Supreme Deities
-            cursor.execute("SELECT id, name FROM religions WHERE supreme_deity = 'Unknown'")
-            for rid, name in cursor.fetchall():
-                desc = f"The Religion '{name}' does not have an assigned head god, supreme deity, or localized avatar."
-                cursor.execute("INSERT INTO inconsistencies (subject_type, subject_id, description) VALUES ('Religion', ?, ?)", (rid, desc))
-                self.active_question_queue.append({
-                    "type": "Religion",
-                    "id": rid,
-                    "name": name,
-                    "field": "supreme_deity",
-                    "question": f"Who is the supreme deity, avatar, or high guiding force worshipped within the **{name}** faith?"
-                })
-
-            conn.commit()
-            conn.close()
-            
-            if self.active_question_queue:
-                self.active_question_index = 0
-                self.present_current_active_question()
-            else:
-                self.chat_history.append(
-                    "<br><b>[AI Interviewer]</b> Fantastic news! The knowledge base is fully structured, "
-                    "with zero unresolved contradictions or structural omissions detected.<br>"
-                    "The <b>procedural cartography synthesis layer is now fully unlocked</b> and ready to generate!"
-                )
-                self.btn_generate_map_synthesis.setEnabled(True)
-
-        except Exception as e:
-            print(f"Error during reconciliation phase: {e}")
-
-    def present_current_active_question(self):
-        """Updates Left, Middle, and Right Panels contextually based on the active question."""
-        if self.active_question_index >= len(self.active_question_queue):
-            self.run_local_lore_reconciliation()
-            return
-            
-        q = self.active_question_queue[self.active_question_index]
-        self.chat_history.append(f"<br><b>[AI Question on {q['type']}]</b> {q['question']}")
+        print("Reconciliation Triggered: Syncing AI knowledge vectors...")
         
-        # Route Panels contextually to match the active question's domain
-        self.align_panels_to_subject_theme(q["type"], q["id"])
-
-    def align_panels_to_subject_theme(self, subject_type, entity_id):
-        """Dynamically populates Left, Middle, and Right panels with synced data of the active subject."""
-        self.middle_table.blockSignals(True)
-        self.middle_table.setRowCount(0)
-        
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Step A: Load grid table matching the active subject category (Panel 2)
-            if subject_type == "Faction":
-                self.middle_table.setColumnCount(3)
-                self.middle_table.setHorizontalHeaderLabels(["ID", "Faction Name", "Expansionism"])
-                cursor.execute("SELECT id, name, expansionism FROM factions")
-                rows = cursor.fetchall()
-                self.middle_table.setRowCount(len(rows))
-                for idx, (fid, name, exp) in enumerate(rows):
-                    self.middle_table.setItem(idx, 0, QTableWidgetItem(str(fid)))
-                    self.middle_table.setItem(idx, 1, QTableWidgetItem(name))
-                    self.middle_table.setItem(idx, 2, QTableWidgetItem(str(exp)))
-                    
-                # Load active note text (Panel 1)
-                cursor.execute("SELECT associated_note_id FROM factions WHERE id = ?", (entity_id,))
-                note_id_row = cursor.fetchone()
-                if note_id_row and note_id_row[0]:
-                    self.load_note_by_id(note_id_row[0])
-                    
-            elif subject_type == "Settlement":
-                self.middle_table.setColumnCount(3)
-                self.middle_table.setHorizontalHeaderLabels(["ID", "Burg Name", "Population (k)"])
-                cursor.execute("SELECT id, name, population FROM settlements")
-                rows = cursor.fetchall()
-                self.middle_table.setRowCount(len(rows))
-                for idx, (sid, name, pop) in enumerate(rows):
-                    self.middle_table.setItem(idx, 0, QTableWidgetItem(str(sid)))
-                    self.middle_table.setItem(idx, 1, QTableWidgetItem(name))
-                    self.middle_table.setItem(idx, 2, QTableWidgetItem(str(pop)))
-                    
-                cursor.execute("SELECT associated_note_id FROM settlements WHERE id = ?", (entity_id,))
-                note_id_row = cursor.fetchone()
-                if note_id_row and note_id_row[0]:
-                    self.load_note_by_id(note_id_row[0])
-
-            elif subject_type == "Religion":
-                self.middle_table.setColumnCount(3)
-                self.middle_table.setHorizontalHeaderLabels(["ID", "Religion Name", "Supreme Deity"])
-                cursor.execute("SELECT id, name, supreme_deity FROM religions")
-                rows = cursor.fetchall()
-                self.middle_table.setRowCount(len(rows))
-                for idx, (rid, name, deity) in enumerate(rows):
-                    self.middle_table.setItem(idx, 0, QTableWidgetItem(str(rid)))
-                    self.middle_table.setItem(idx, 1, QTableWidgetItem(name))
-                    self.middle_table.setItem(idx, 2, QTableWidgetItem(str(deity)))
-                    
-                cursor.execute("SELECT associated_note_id FROM religions WHERE id = ?", (entity_id,))
-                note_id_row = cursor.fetchone()
-                if note_id_row and note_id_row[0]:
-                    self.load_note_by_id(note_id_row[0])
-
-            # Select and highlight the active entity row in Panel 2
-            for row in range(self.middle_table.rowCount()):
-                if int(self.middle_table.item(row, 0).text()) == entity_id:
-                    self.middle_table.selectRow(row)
-                    break
-
-            conn.close()
-        except Exception as e:
-            print(f"Error drawing contextual sub-grids: {e}")
-            
-        self.middle_table.blockSignals(False)
-        self.update_parameter_inspector(subject_type, entity_id)
-
-    def load_note_by_id(self, note_id):
-        """Loads narrative prose matching note_id straight into Panel 1."""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, title, content FROM notes WHERE id = ?", (note_id,))
-            row = cursor.fetchone()
-            conn.close()
-            if row:
-                self.selected_note_id = row[0]
-                self.selected_note_title = row[1]
-                self.txt_note_title.setText(row[1])
-                self.note_writer.setPlainText(row[2])
-        except Exception as e:
-            print(f"Error loading associated note: {e}")
-
-    def on_file_browser_node_clicked(self, index):
-        """Opens selected files straight inside Panel 1."""
-        file_path = self.file_model.filePath(index)
-        if not self.file_model.isDir(index) and file_path.endswith(('.md', '.txt')):
-            title = os.path.splitext(os.path.basename(file_path))[0]
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                
-                self.txt_note_title.setText(title)
-                self.note_writer.setPlainText(content)
-                self.selected_note_title = title
-                
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                cursor.execute("SELECT id FROM notes WHERE title = ?", (title,))
-                row = cursor.fetchone()
-                if row:
-                    self.selected_note_id = row[0]
-                conn.close()
-            except Exception as e:
-                print(e)
-
-    def save_active_note_content(self):
-        """Commits Panel 1 editor changes to SQLite and flat-file disk storage."""
-        title = self.txt_note_title.text().strip()
-        content = self.note_writer.toPlainText().strip()
-        if not title: return
-
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO notes (title, content, category)
-                VALUES (?, ?, 'General')
-                ON CONFLICT(title) DO UPDATE SET content=excluded.content, updated_at=datetime('now')
-            """, (title, content))
-            conn.commit()
-            conn.close()
-
-            # Save file to General folder
-            os.makedirs(os.path.join(self.get_vault_dir(), "General"), exist_ok=True)
-            f_path = os.path.join(self.get_vault_dir(), "General", f"{title}.md")
-            with open(f_path, "w", encoding="utf-8") as file:
-                file.write(content)
-                
-            self.statusBar.showMessage(f"Note '{title}' saved to database and disk vault.")
-            self.run_local_lore_reconciliation()
-        except Exception as e:
-            print(f"Error committing note data: {e}")
-
-    # =============================================================================
-    # PANEL 3: ADAPTIVE PARAMETER FORM INSPECTOR
-    # =============================================================================
-    def on_middle_table_selection_changed(self):
-        selected_ranges = self.middle_table.selectedRanges()
-        if not selected_ranges: return
-        row = selected_ranges[0].topRow()
-        entity_id = int(self.middle_table.item(row, 0).text())
-        
-        # Determine current active subject from the Bottom Question queue
-        if self.active_question_index < len(self.active_question_queue):
-            q = self.active_question_queue[self.active_question_index]
-            self.update_parameter_inspector(q["type"], entity_id)
-
-    def update_parameter_inspector(self, subject_type, entity_id):
-        """Recreates a dynamic, scrollable form panel matching Azgaar's editing tools."""
-        self.inspector_stack.setCurrentIndex(0) # Swap to Form layout page
-        
-        # Clear old form inputs safely
+    def update_parameter_inspector(self, table_name, item_id):
         while self.form_layout.count():
             item = self.form_layout.takeAt(0)
-            w = item.widget()
-            if w: w.setParent(None)
-
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            if item.widget(): item.widget().setParent(None)
             
-            if subject_type == "Faction":
-                cursor.execute("SELECT name, color, expansionism, treasury FROM factions WHERE id = ?", (entity_id,))
-                row = cursor.fetchone()
-                if row:
-                    lbl_id = QLabel(f"<b>Faction ID:</b> {entity_id}")
-                    self.form_layout.addRow(lbl_id)
-                    
-                    self.txt_fac_name = QLineEdit(row[0])
-                    self.form_layout.addRow("Faction Name:", self.txt_fac_name)
-                    
-                    self.txt_fac_color = QLineEdit(row[1])
-                    btn_color = QPushButton("Pick Color")
-                    btn_color.clicked.connect(lambda: self.trigger_color_picker_form(self.txt_fac_color))
-                    color_lay = QHBoxLayout()
-                    color_lay.addWidget(self.txt_fac_color)
-                    color_lay.addWidget(btn_color)
-                    self.form_layout.addRow("Border Color:", color_lay)
-
-                    self.sp_fac_exp = QDoubleSpinBox()
-                    self.sp_fac_exp.setRange(0.1, 5.0)
-                    self.sp_fac_exp.setValue(row[2] if row[2] else 1.0)
-                    self.form_layout.addRow("Expansion Rate:", self.sp_fac_exp)
-
-                    self.sp_fac_treasury = QDoubleSpinBox()
-                    self.sp_fac_treasury.setRange(0.0, 100000.0)
-                    self.sp_fac_treasury.setValue(row[3] if row[3] else 0.0)
-                    self.form_layout.addRow("Treasury Gold:", self.sp_fac_treasury)
-                    
-                    btn_apply = QPushButton("Apply State Changes")
-                    btn_apply.clicked.connect(lambda: self.commit_faction_form_changes(entity_id))
-                    self.form_layout.addRow(btn_apply)
-
-            elif subject_type == "Settlement":
-                cursor.execute("SELECT name, population, cell_idx FROM settlements WHERE id = ?", (entity_id,))
-                row = cursor.fetchone()
-                if row:
-                    self.txt_burg_name = QLineEdit(row[0])
-                    self.form_layout.addRow("Burg Name:", self.txt_burg_name)
-                    
-                    self.sp_burg_pop = QDoubleSpinBox()
-                    self.sp_burg_pop.setRange(0.1, 1000.0)
-                    self.sp_burg_pop.setValue(row[1] if row[1] else 10.0)
-                    self.form_layout.addRow("Population (k):", self.sp_burg_pop)
-                    
-                    lbl_cell = QLabel(f"<b>Mapped Cell Index:</b> {row[2]}")
-                    self.form_layout.addRow(lbl_cell)
-                    
-                    btn_apply = QPushButton("Apply Settlement Changes")
-                    btn_apply.clicked.connect(lambda: self.commit_settlement_form_changes(entity_id))
-                    self.form_layout.addRow(btn_apply)
-
-            elif subject_type == "Religion":
-                cursor.execute("SELECT name, color, supreme_deity FROM religions WHERE id = ?", (entity_id,))
-                row = cursor.fetchone()
-                if row:
-                    self.txt_rel_name = QLineEdit(row[0])
-                    self.form_layout.addRow("Faith Name:", self.txt_rel_name)
-                    
-                    self.txt_deity = QLineEdit(row[2])
-                    self.form_layout.addRow("Supreme Deity:", self.txt_deity)
-                    
-                    btn_apply = QPushButton("Apply Religion Changes")
-                    btn_apply.clicked.connect(lambda: self.commit_religion_form_changes(entity_id))
-                    self.form_layout.addRow(btn_apply)
-
-            conn.close()
-        except Exception as e:
-            print(f"Error loading parameters inspector: {e}")
-
-    def trigger_color_picker_form(self, target_line_edit):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            target_line_edit.setText(color.name())
-
-    def commit_faction_form_changes(self, entity_id):
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE factions 
-                SET name = ?, color = ?, expansionism = ?, treasury = ?
-                WHERE id = ?
-            """, (self.txt_fac_name.text(), self.txt_fac_color.text(), self.sp_fac_exp.value(), self.sp_fac_treasury.value(), entity_id))
-            conn.commit()
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            cols = cursor.fetchall()
+            pk_col = cols[0][1] if cols else "id"
+            cursor.execute(f"SELECT * FROM {table_name} WHERE {pk_col}=?", (item_id,))
+            row = cursor.fetchone()
             conn.close()
-            self.statusBar.showMessage("Faction modifications committed to DB.")
-            self.run_local_lore_reconciliation()
-        except Exception as e:
-            print(e)
-
-    def commit_settlement_form_changes(self, entity_id):
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE settlements 
-                SET name = ?, population = ?
-                WHERE id = ?
-            """, (self.txt_burg_name.text(), self.sp_burg_pop.value(), entity_id))
-            conn.commit()
-            conn.close()
-            self.statusBar.showMessage("Settlement modifications committed to DB.")
-            self.run_local_lore_reconciliation()
-        except Exception as e:
-            print(e)
-
-    def commit_religion_form_changes(self, entity_id):
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE religions 
-                SET name = ?, supreme_deity = ?
-                WHERE id = ?
-            """, (self.txt_rel_name.text(), self.txt_deity.text(), entity_id))
-            conn.commit()
-            conn.close()
-            self.statusBar.showMessage("Religion modifications committed to DB.")
-            self.run_local_lore_reconciliation()
-        except Exception as e:
-            print(e)
-
-    # =============================================================================
-    # CHAT INTERACTION & RECONCILIATION SUBMITTAL
-    # =============================================================================
-    def send_chat_message_to_reconciler(self):
-        """Processes user chat responses, updating the SQLite target elements dynamically."""
-        user_reply = self.txt_chat_prompt.text().strip()
-        if not user_reply: return
-        
-        self.chat_history.append(f"<b>You:</b> {user_reply}")
-        self.txt_chat_prompt.clear()
-
-        if self.active_question_index >= len(self.active_question_queue):
-            self.chat_history.append("<b>[AI Interviewer]</b> I have no further questions! Please synthesize the map layers.")
-            return
-
-        q = self.active_question_queue[self.active_question_index]
-        
-        # Parse user answer to edit the targeted database field
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
             
-            if q["type"] == "Faction":
-                # Capital cell index parsed from reply (or procedurally generated)
-                cursor.execute("UPDATE factions SET capital_cell = 100 WHERE id = ?", (q["id"],))
-            elif q["type"] == "Settlement":
-                # Assign to faction 1 as a placeholder
-                cursor.execute("UPDATE settlements SET faction_id = 1 WHERE id = ?", (q["id"],))
-            elif q["type"] == "Religion":
-                cursor.execute("UPDATE religions SET supreme_deity = ? WHERE id = ?", (user_reply, q["id"]))
+            if not row: return
             
-            conn.commit()
-            conn.close()
+            for col, val in zip(cols, row):
+                col_name = col[1]
+                t = QLineEdit(str(val) if val is not None else "")
+                self.form_layout.addRow(f"{col_name}:", t)
+                
+            btn = QPushButton("Save Changes")
+            self.form_layout.addRow(btn)
         except Exception as e:
-            print(e)
-            
-        self.active_question_index += 1
-        self.present_current_active_question()
+            print(f"Inspector error: {e}")
 
-    def trigger_map_synthesis_pipeline(self):
-        """Builds the map on the right panel matching the DB constraints."""
-        self.inspector_stack.setCurrentIndex(1)
-        self.chat_history.append("<b>[AI Interviewer]</b> Synthesizing layout... Applying Dijkstra constraints.")
-        # Re-generate world layout and reload UI...
-        self.map_viewer_widget.update()
-        QMessageBox.information(self, "Synthesis Complete", "The world map has been synthesized from your lore.")
+    def toggle_map_view(self, checked):
+        self.right_stack.setCurrentIndex(1 if checked else 0)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
