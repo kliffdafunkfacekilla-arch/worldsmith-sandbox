@@ -65,6 +65,7 @@ def setup_master_knowledge_db(db_path):
         cursor.execute("CREATE TABLE IF NOT EXISTS actors (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, faction_id INTEGER, current_cell_idx INTEGER, is_alive INTEGER DEFAULT 1, role TEXT, FOREIGN KEY(faction_id) REFERENCES factions(id))")
         cursor.execute("CREATE TABLE IF NOT EXISTS faction_relations (faction_a_id INTEGER, faction_b_id INTEGER, diplomacy_score INTEGER, treaty_status TEXT, UNIQUE(faction_a_id, faction_b_id), FOREIGN KEY(faction_a_id) REFERENCES factions(id), FOREIGN KEY(faction_b_id) REFERENCES factions(id))")
         cursor.execute("CREATE TABLE IF NOT EXISTS faction_economics (id INTEGER PRIMARY KEY AUTOINCREMENT, faction_id INTEGER, good_name TEXT, status TEXT, urgency_multiplier REAL, FOREIGN KEY(faction_id) REFERENCES factions(id))")
+        cursor.execute("CREATE TABLE IF NOT EXISTS atomic_facts (id INTEGER PRIMARY KEY AUTOINCREMENT, subject TEXT NOT NULL, relationship TEXT NOT NULL, target TEXT NOT NULL, context TEXT, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
         cursor.execute("CREATE TABLE IF NOT EXISTS inconsistencies (id INTEGER PRIMARY KEY AUTOINCREMENT, subject_type TEXT, subject_id INTEGER, description TEXT, status TEXT DEFAULT 'Active')")
         cursor.execute("CREATE TABLE IF NOT EXISTS map_snapshots (year INTEGER PRIMARY KEY, engine_state_json BLOB)")
         cursor.execute("CREATE TABLE IF NOT EXISTS markers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, type TEXT NOT NULL, cell_idx INTEGER NOT NULL, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
@@ -903,9 +904,20 @@ class LordsmithStudioMainWindow(QMainWindow):
                 QMessageBox.critical(self, "Export Error", f"Failed to export GeoJSON: {e}")
 
     def action_import_lore(self):
-        from PyQt6.QtWidgets import QFileDialog, QProgressDialog
-        file_paths, _ = QFileDialog.getOpenFileNames(self, "Select Markdown Lore Files", "", "Markdown Files (*.md);;All Files (*)")
+        from PyQt6.QtWidgets import QFileDialog, QProgressDialog, QMessageBox
+        import os
+        dir_path = QFileDialog.getExistingDirectory(self, "Select Root Directory for Lore Import", "")
+        if not dir_path:
+            return
+            
+        file_paths = []
+        for root, dirs, files in os.walk(dir_path):
+            for file in files:
+                if file.lower().endswith(('.md', '.txt')):
+                    file_paths.append(os.path.join(root, file))
+                    
         if not file_paths:
+            QMessageBox.warning(self, "No Files Found", "No markdown (.md) or text (.txt) files were found in the selected directory.")
             return
             
         vault_dir = os.path.join(self.project_dir, 'lore_vault')

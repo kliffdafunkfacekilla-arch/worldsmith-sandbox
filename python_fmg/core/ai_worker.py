@@ -312,6 +312,44 @@ class AILoreIngestor(QThread):
                         "name": {"type": "STRING"},
                         "population_k": {"type": "NUMBER"}
                     }
+                },
+                "actor": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "name": {"type": "STRING"},
+                        "faction_name": {"type": "STRING"},
+                        "role": {"type": "STRING"}
+                    }
+                },
+                "faction_economic_status": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "faction_name": {"type": "STRING"},
+                        "good_name": {"type": "STRING"},
+                        "status": {"type": "STRING", "enum": ["Surplus", "Deficit"]},
+                        "urgency_multiplier": {"type": "NUMBER"}
+                    }
+                },
+                "diplomacy_tension": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "faction_a": {"type": "STRING"},
+                        "faction_b": {"type": "STRING"},
+                        "diplomacy_score": {"type": "INTEGER"},
+                        "treaty_status": {"type": "STRING"}
+                    }
+                },
+                "atomic_facts": {
+                    "type": "ARRAY",
+                    "items": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "subject": {"type": "STRING"},
+                            "relationship": {"type": "STRING"},
+                            "target": {"type": "STRING"},
+                            "context": {"type": "STRING"}
+                        }
+                    }
                 }
             },
             "required": ["category"]
@@ -381,6 +419,8 @@ class AILoreIngestor(QThread):
                         raise Exception("AI backend unreachable (No Ollama or API key).")
                     
                     dissected_data = json.loads(clean_resp)
+                    if not dissected_data:
+                        dissected_data = {}
                     if dissected_data.get("category") and dissected_data["category"] != "General":
                         final_category = dissected_data["category"]
 
@@ -407,6 +447,51 @@ class AILoreIngestor(QThread):
                             VALUES (?, ?, ?, ?)
                         """, (s["name"], s.get("population_k", 10.0), random.randint(100, 900), note_id))
 
+                    if "actor" in dissected_data and dissected_data["actor"].get("name"):
+                        a = dissected_data["actor"]
+                        # Get faction id if possible
+                        cursor.execute("SELECT id FROM factions WHERE name=?", (a.get("faction_name"),))
+                        f_row = cursor.fetchone()
+                        f_id = f_row[0] if f_row else None
+                        cursor.execute("""
+                            INSERT INTO actors (name, faction_id, current_cell_idx, is_alive, role)
+                            VALUES (?, ?, ?, 1, ?)
+                        """, (a["name"], f_id, random.randint(100, 900), a.get("role")))
+
+                    if "faction_economic_status" in dissected_data and dissected_data["faction_economic_status"].get("faction_name"):
+                        e = dissected_data["faction_economic_status"]
+                        cursor.execute("SELECT id FROM factions WHERE name=?", (e.get("faction_name"),))
+                        f_row = cursor.fetchone()
+                        f_id = f_row[0] if f_row else None
+                        if f_id:
+                            cursor.execute("""
+                                INSERT INTO faction_economics (faction_id, good_name, status, urgency_multiplier)
+                                VALUES (?, ?, ?, ?)
+                            """, (f_id, e.get("good_name"), e.get("status"), e.get("urgency_multiplier", 1.0)))
+
+                    if "diplomacy_tension" in dissected_data and dissected_data["diplomacy_tension"].get("faction_a") and dissected_data["diplomacy_tension"].get("faction_b"):
+                        d = dissected_data["diplomacy_tension"]
+                        cursor.execute("SELECT id FROM factions WHERE name=?", (d.get("faction_a"),))
+                        fa_row = cursor.fetchone()
+                        cursor.execute("SELECT id FROM factions WHERE name=?", (d.get("faction_b"),))
+                        fb_row = cursor.fetchone()
+                        if fa_row and fb_row:
+                            try:
+                                cursor.execute("""
+                                    INSERT INTO faction_relations (faction_a_id, faction_b_id, diplomacy_score, treaty_status)
+                                    VALUES (?, ?, ?, ?)
+                                """, (fa_row[0], fb_row[0], d.get("diplomacy_score", 0), d.get("treaty_status", "Neutral")))
+                            except sqlite3.IntegrityError:
+                                pass # Unique constraint failed, relation exists
+
+                    if "atomic_facts" in dissected_data and isinstance(dissected_data["atomic_facts"], list):
+                        for fact in dissected_data["atomic_facts"]:
+                            if fact.get("subject") and fact.get("relationship") and fact.get("target"):
+                                cursor.execute("""
+                                    INSERT INTO atomic_facts (subject, relationship, target, context, associated_note_id)
+                                    VALUES (?, ?, ?, ?, ?)
+                                """, (fact.get("subject"), fact.get("relationship"), fact.get("target"), fact.get("context", ""), note_id))
+
                 cursor.execute("UPDATE notes SET category=? WHERE id=?", (final_category, note_id))
                 conn.commit()
                 conn.close()
@@ -417,19 +502,25 @@ class AILoreIngestor(QThread):
 
             except Exception as e:
                 print(f"Skipping JSON entity extraction for {filename}: {e}")
+                # Ensure the primary connection is closed so we don't lock the database forever
+                try:
+                    if 'conn' in locals():
+                        conn.close()
+                except Exception:
+                    pass
                 
                 try:
                     category = "General"
-                    conn = sqlite3.connect(self.db_path, timeout=15.0)
-                    conn.execute("PRAGMA journal_mode=WAL;")
-                    cursor = conn.cursor()
-                    cursor.execute("""
+                    conn2 = sqlite3.connect(self.db_path, timeout=15.0)
+                    conn2.execute("PRAGMA journal_mode=WAL;")
+                    cursor2 = conn2.cursor()
+                    cursor2.execute("""
                         INSERT INTO notes (title, content, category)
                         VALUES (?, ?, ?)
                         ON CONFLICT(title) DO UPDATE SET content=excluded.content, category=excluded.category
                     """, (os.path.splitext(filename)[0], raw_prose, category))
-                    conn.commit()
-                    conn.close()
+                    conn2.commit()
+                    conn2.close()
 
                     dest_path = os.path.join(self.vault_dir, category, filename)
                     with open(dest_path, "w", encoding="utf-8") as dest_f:
