@@ -656,6 +656,11 @@ class LordsmithStudioMainWindow(QMainWindow):
         # Build Export Menu
         file_menu = self.menuBar().addMenu("File")
         
+        action_generate_map = file_menu.addAction("🎲 Generate Procedural World Map")
+        action_generate_map.triggered.connect(self.action_generate_procedural_world)
+        
+        file_menu.addSeparator()
+        
         action_export_geojson = file_menu.addAction("Export GeoJSON Framework")
         action_export_geojson.triggered.connect(self.action_export_geojson)
         
@@ -929,6 +934,10 @@ class LordsmithStudioMainWindow(QMainWindow):
         self.w_provinces.refresh_grid()
         # Trigger map canvas re-render since new cities might have spawned
         self.map_viewer_canvas.update()
+        
+        # Switch to chat tab and trigger proactive AI audit
+        self.left_tabs.setCurrentWidget(self.tab_chat)
+        self.trigger_lore_audit()
 
     def action_export_wiki(self):
         from python_fmg.core.wiki_compiler import WikiCompiler
@@ -997,6 +1006,78 @@ class LordsmithStudioMainWindow(QMainWindow):
         self.ai_worker = OllamaPromptWorker(user_text, db_path=self.db_path, genre=genre)
         self.ai_worker.response_received.connect(self.handle_ai_response)
         self.ai_worker.start()
+
+    def trigger_lore_audit(self):
+        self.handle_ai_response("Processing worldstate... Analyzing database rules, actors, and diplomatic pressures...")
+        try:
+            import json
+            import sqlite3
+            conn = sqlite3.connect(self.db_path, timeout=15.0)
+            conn.execute("PRAGMA journal_mode=WAL;")
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT name, gov_type FROM factions")
+            factions = cursor.fetchall()
+            
+            # Use a try/except for actors in case the DB hasn't been wiped yet in older test setups
+            try:
+                cursor.execute("SELECT name, is_alive, role FROM actors")
+                actors = cursor.fetchall()
+            except sqlite3.OperationalError:
+                actors = []
+
+            cursor.execute("SELECT name, population FROM settlements")
+            settlements = cursor.fetchall()
+            conn.close()
+
+            db_summary = {
+                "factions": [f"{f[0]} ({f[1]})" for f in factions],
+                "actors": [f"{a[0]} ({a[2]}) - {'Alive' if a[1] else 'Dead'}" for a in actors],
+                "settlements": [f"{s[0]} (Pop: {s[1]})" for s in settlements]
+            }
+            summary_str = json.dumps(db_summary, indent=2)
+            
+            from python_fmg.core.ai_worker import AILoreDriverWorker
+            self.driver_worker = AILoreDriverWorker(system_state=summary_str, parent=self)
+            self.driver_worker.query_resolved.connect(self.handle_ai_response)
+            self.driver_worker.start()
+        except Exception as e:
+            self.handle_ai_response(f"Audit failed: {e}")
+
+    def action_generate_procedural_world(self):
+        try:
+            from PyQt6.QtWidgets import QInputDialog
+            cell_count, ok = QInputDialog.getInt(
+                self, 
+                "World Generation Scale", 
+                "Enter number of Voronoi cells (higher = better resolution but slower):", 
+                10000, 
+                1000, 
+                50000, 
+                1000
+            )
+            if not ok:
+                return
+                
+            self.statusBar().showMessage(f"Generating Procedural World Map with {cell_count} cells...")
+            self.map_engine.generate_voronoi_mesh(cell_count)
+            self.map_engine.run_heightmap_pipeline()
+            if hasattr(self.map_engine, 'run_biomes_climate'):
+                self.map_engine.run_biomes_climate()
+            if hasattr(self.map_engine, 'run_hydrology_rivers'):
+                self.map_engine.run_hydrology_rivers()
+            if hasattr(self.map_engine, 'run_states_expansion'):
+                self.map_engine.run_states_expansion()
+            self.map_engine.sink_generated_world_to_db(self.db_path)
+            
+            self.btn_toggle_map.setChecked(True)
+            self.toggle_map_view(True)
+            self.map_viewer_canvas.update()
+            
+            self.statusBar().showMessage("World Map Generation Complete!")
+            QMessageBox.information(self, "Success", "Procedural World Map successfully generated from the current database state!")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to generate map: {e}")
 
     def handle_ai_response(self, text):
         self.ai_prompt_history.append(
