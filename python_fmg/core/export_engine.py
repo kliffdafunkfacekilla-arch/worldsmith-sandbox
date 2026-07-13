@@ -5,9 +5,9 @@ from PyQt6.QtCore import QRect, QSize
 from PyQt6.QtGui import QPixmap, QPainter
 
 class WorldsmithExportEngine:
-    def __init__(self, main_window):
-        self.win = main_window
-        self.engine = main_window.map_engine
+    def __init__(self, map_engine, db_path="lore_forge_world.db"):
+        self.engine = map_engine
+        self.db_path = db_path
 
     def compile_geojson_framework(self, output_path):
         """
@@ -39,7 +39,7 @@ class WorldsmithExportEngine:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(geojson, f, indent=2)
 
-    def extract_cropped_context_map(self, cell_idx, output_dir):
+    def extract_cropped_context_map(self, cell_idx, output_dir, map_viewer):
         """
         Captures a high-resolution sub-map square viewport centered exactly on a specific cell.
         Saves the cropped png inside the note folder for automated local wiki embedding.
@@ -52,11 +52,52 @@ class WorldsmithExportEngine:
         src_y = int(cell["y"] - (crop_size / 2))
         
         # Instantiate flat output canvas texture grabber
-        master_pixmap = QPixmap(QSize(self.win.map_viewer.width(), self.win.map_viewer.height()))
+        master_pixmap = QPixmap(QSize(map_viewer.width(), map_viewer.height()))
         painter = QPainter(master_pixmap)
-        self.win.map_viewer.render(painter)
+        map_viewer.render(painter)
         painter.end()
         
         cropped_pixmap = master_pixmap.copy(QRect(src_x, src_y, crop_size, crop_size))
         output_path = os.path.join(output_dir, f"context_cell_{cell_idx}.png")
         cropped_pixmap.save(output_path, "PNG")
+
+    def export_simulation_seed(self, output_path, db_path="lore_forge_world.db"):
+        """
+        Dumps all relational lore, rules, and spatial data from the SQLite database
+        into a single JSON 'World Seed' for the external simulation app.
+        """
+        import sqlite3
+        import json
+        
+        world_seed = {}
+        
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row 
+            cursor = conn.cursor()
+            
+            # The exact tables the story simulation needs to govern logic and space
+            tables_to_export = [
+                "factions", "cultures", "religions", "burgs", 
+                "provinces", "calendar_config", "moons", "cells",
+                "actors", "faction_relations", "faction_economics"
+            ]
+            
+            for table in tables_to_export:
+                cursor.execute(f"SELECT count(name) FROM sqlite_master WHERE type='table' AND name='{table}'")
+                if cursor.fetchone()[0] == 1:
+                    cursor.execute(f"SELECT * FROM {table}")
+                    rows = cursor.fetchall()
+                    world_seed[table] = [dict(row) for row in rows]
+                else:
+                    world_seed[table] = [] 
+                    
+            conn.close()
+            
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(world_seed, f, indent=2)
+                
+            print(f"SUCCESS: Simulation seed exported to {output_path}")
+            
+        except sqlite3.Error as e:
+            print(f"Database error during simulation export: {e}")

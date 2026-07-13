@@ -26,6 +26,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from python_fmg.core.ai_worker import OllamaPromptWorker, LoreAuditWorker, AILoreIngestor, AILoreDriverWorker, AIBootstrapperWorker
 from python_fmg.renderers.notebook_editor import MarkdownNotebookEditor
 from python_fmg.core.azgaar_engine import AzgaarEngine, CosmosEngine
+from python_fmg.core.export_engine import WorldsmithExportEngine
 
 # =============================================================================
 # COHESIVE RELATIONAL DATABASE INITIALIZATION WITH TEMPORAL MODULES
@@ -38,7 +39,7 @@ def setup_master_knowledge_db(db_path):
         cursor.execute("PRAGMA foreign_keys = ON;")
         
         cursor.execute("CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT UNIQUE NOT NULL, content TEXT NOT NULL, category TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-        cursor.execute("CREATE TABLE IF NOT EXISTS factions (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, color TEXT NOT NULL, gov_type TEXT DEFAULT 'Feudal Monarchy', dominant_cultures TEXT, dominant_religions TEXT, leaders TEXT, imports TEXT, exports TEXT, aggression_scale INTEGER DEFAULT 5, trade_scale INTEGER DEFAULT 5, explore_scale INTEGER DEFAULT 5, espionage_scale INTEGER DEFAULT 5, morale INTEGER DEFAULT 5, crime INTEGER DEFAULT 5, poverty INTEGER DEFAULT 5, freedom INTEGER DEFAULT 5, magic_stance TEXT DEFAULT 'Regulated', domain_type TEXT DEFAULT 'Both', treasury REAL DEFAULT 1000.0, capital_cell INTEGER, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS factions (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, color TEXT NOT NULL, gov_type TEXT DEFAULT 'Feudal Monarchy', dominant_cultures TEXT, dominant_religions TEXT, aggression_scale INTEGER DEFAULT 5, trade_scale INTEGER DEFAULT 5, explore_scale INTEGER DEFAULT 5, espionage_scale INTEGER DEFAULT 5, morale INTEGER DEFAULT 5, crime INTEGER DEFAULT 5, poverty INTEGER DEFAULT 5, freedom INTEGER DEFAULT 5, magic_stance TEXT DEFAULT 'Regulated', domain_type TEXT DEFAULT 'Both', treasury REAL DEFAULT 1000.0, capital_cell INTEGER, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
         cursor.execute("CREATE TABLE IF NOT EXISTS provinces (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, color TEXT NOT NULL, state_id INTEGER NOT NULL, governor_name TEXT, tax_rate REAL DEFAULT 10.0, local_morale INTEGER DEFAULT 5, local_crime INTEGER DEFAULT 5, local_poverty INTEGER DEFAULT 5, local_freedom INTEGER DEFAULT 5, local_magic_handling TEXT DEFAULT 'Lax Enforcement', associated_note_id INTEGER, FOREIGN KEY(state_id) REFERENCES factions(id) ON DELETE CASCADE, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
         cursor.execute("CREATE TABLE IF NOT EXISTS cultures (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, code TEXT NOT NULL, language_base TEXT DEFAULT 'Imperial', trait_type TEXT DEFAULT 'None', trait_modifier REAL DEFAULT 1.0, domain_type TEXT DEFAULT 'Both', associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
         cursor.execute("CREATE TABLE IF NOT EXISTS cell_cultures_overlap (cell_id INTEGER NOT NULL, culture_id INTEGER NOT NULL, density REAL DEFAULT 1.0, PRIMARY KEY (cell_id, culture_id), FOREIGN KEY(culture_id) REFERENCES cultures(id) ON DELETE CASCADE)")
@@ -48,7 +49,7 @@ def setup_master_knowledge_db(db_path):
         cursor.execute("CREATE TABLE IF NOT EXISTS production_goods (cell_id INTEGER PRIMARY KEY, good TEXT NOT NULL, valuation REAL DEFAULT 1.0, is_finite INTEGER DEFAULT 0, max_capacity REAL DEFAULT 1000.0, current_capacity REAL DEFAULT 1000.0, is_market_center INTEGER DEFAULT 0, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
         cursor.execute("CREATE TABLE IF NOT EXISTS trade_routes (id INTEGER PRIMARY KEY AUTOINCREMENT, origin_cell INTEGER NOT NULL, destination_cell INTEGER NOT NULL, route_type TEXT DEFAULT 'Cobbled Road', safety_index REAL DEFAULT 1.0)")
         cursor.execute("CREATE TABLE IF NOT EXISTS cells (id INTEGER PRIMARY KEY, centroid_x REAL NOT NULL, centroid_y REAL NOT NULL, elevation INTEGER DEFAULT 20, moisture INTEGER DEFAULT 10, temperature INTEGER DEFAULT 15, biome TEXT DEFAULT 'Marine', plant_value INTEGER DEFAULT 5, prey_value INTEGER DEFAULT 5, predator_value INTEGER DEFAULT 5, state_id INTEGER, province_id INTEGER, culture_id INTEGER, religion_id INTEGER, FOREIGN KEY(state_id) REFERENCES factions(id) ON DELETE SET NULL, FOREIGN KEY(province_id) REFERENCES provinces(id) ON DELETE SET NULL, FOREIGN KEY(culture_id) REFERENCES cultures(id) ON DELETE SET NULL, FOREIGN KEY(religion_id) REFERENCES religions(id) ON DELETE SET NULL)")
-        cursor.execute("CREATE TABLE IF NOT EXISTS settlements (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, population REAL DEFAULT 10.0, cell_idx INTEGER, faction_id INTEGER, culture_id INTEGER, has_port INTEGER DEFAULT 0, has_university INTEGER DEFAULT 0, notable_locations TEXT, notable_persons_links TEXT, leaders_links TEXT, associated_note_id INTEGER, FOREIGN KEY(faction_id) REFERENCES factions(id) ON DELETE SET NULL, FOREIGN KEY(culture_id) REFERENCES cultures(id) ON DELETE SET NULL, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS settlements (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, population REAL DEFAULT 10.0, cell_idx INTEGER, faction_id INTEGER, culture_id INTEGER, has_port INTEGER DEFAULT 0, has_university INTEGER DEFAULT 0, notable_locations TEXT, leaders_links TEXT, associated_note_id INTEGER, FOREIGN KEY(faction_id) REFERENCES factions(id) ON DELETE SET NULL, FOREIGN KEY(culture_id) REFERENCES cultures(id) ON DELETE SET NULL, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
         cursor.execute("CREATE TABLE IF NOT EXISTS geography_plates (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, movement_vector TEXT NOT NULL, volcanic_index REAL DEFAULT 1.0, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
         cursor.execute("CREATE TABLE IF NOT EXISTS magic_layers (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL, mode_type TEXT DEFAULT 'Point', origin_cell_idx INTEGER NOT NULL, termination_cell_idx INTEGER, radius_of_effect INTEGER DEFAULT 10, intensity REAL DEFAULT 1.0, effect_field_description TEXT, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
         cursor.execute("CREATE TABLE IF NOT EXISTS tech_eras (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, description TEXT, year_range TEXT NOT NULL, buff_type TEXT DEFAULT 'Extraction Speed', buff_modifier REAL DEFAULT 1.0, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
@@ -61,6 +62,9 @@ def setup_master_knowledge_db(db_path):
         
         cursor.execute("CREATE TABLE IF NOT EXISTS note_map_bindings (note_id INTEGER, cell_idx INTEGER, PRIMARY KEY (note_id, cell_idx))")
         cursor.execute("CREATE TABLE IF NOT EXISTS markdown_map_bindings (title TEXT PRIMARY KEY, bind_type TEXT, bind_target TEXT, cell_idx INTEGER)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS actors (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, faction_id INTEGER, current_cell_idx INTEGER, is_alive INTEGER DEFAULT 1, role TEXT, FOREIGN KEY(faction_id) REFERENCES factions(id))")
+        cursor.execute("CREATE TABLE IF NOT EXISTS faction_relations (faction_a_id INTEGER, faction_b_id INTEGER, diplomacy_score INTEGER, treaty_status TEXT, UNIQUE(faction_a_id, faction_b_id), FOREIGN KEY(faction_a_id) REFERENCES factions(id), FOREIGN KEY(faction_b_id) REFERENCES factions(id))")
+        cursor.execute("CREATE TABLE IF NOT EXISTS faction_economics (id INTEGER PRIMARY KEY AUTOINCREMENT, faction_id INTEGER, good_name TEXT, status TEXT, urgency_multiplier REAL, FOREIGN KEY(faction_id) REFERENCES factions(id))")
         cursor.execute("CREATE TABLE IF NOT EXISTS inconsistencies (id INTEGER PRIMARY KEY AUTOINCREMENT, subject_type TEXT, subject_id INTEGER, description TEXT, status TEXT DEFAULT 'Active')")
         cursor.execute("CREATE TABLE IF NOT EXISTS map_snapshots (year INTEGER PRIMARY KEY, engine_state_json BLOB)")
         cursor.execute("CREATE TABLE IF NOT EXISTS markers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, type TEXT NOT NULL, cell_idx INTEGER NOT NULL, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
@@ -647,6 +651,7 @@ class LordsmithStudioMainWindow(QMainWindow):
         setup_master_knowledge_db(self.db_path)
 
         self.map_engine = AzgaarEngine()
+        self.export_engine = WorldsmithExportEngine(self.map_engine, self.db_path)
 
         # Build Export Menu
         file_menu = self.menuBar().addMenu("File")
@@ -656,6 +661,9 @@ class LordsmithStudioMainWindow(QMainWindow):
         
         action_export_wiki = file_menu.addAction("Export Static HTML Wiki")
         action_export_wiki.triggered.connect(self.action_export_wiki)
+        
+        action_export_sim = file_menu.addAction("Export Simulation Seed")
+        action_export_sim.triggered.connect(self.action_export_simulation)
 
         action_import_lore = file_menu.addAction("📥 Import Markdown Vault (.md)")
         action_import_lore.triggered.connect(self.action_import_lore)
@@ -996,6 +1004,12 @@ class LordsmithStudioMainWindow(QMainWindow):
             f'<span style="background-color: #29293a; color: #EEEEF8; padding: 4px 8px; border-radius: 6px; display: inline-block;">'
             f'<span style="color: #04D361; font-weight: bold;">AI:</span> {text}</span></div>'
         )
+
+    def action_export_simulation(self):
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save World Seed", "world_seed.json", "JSON Files (*.json)")
+        if file_path:
+            self.export_engine.export_simulation_seed(file_path, db_path=self.db_path)
+            QMessageBox.information(self, "Export Complete", f"Simulation seed successfully exported to {file_path}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

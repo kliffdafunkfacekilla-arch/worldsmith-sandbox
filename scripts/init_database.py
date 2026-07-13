@@ -64,6 +64,44 @@ def init_database():
         )
     """)
 
+    # Actors Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS actors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            faction_id INTEGER,
+            current_cell_idx INTEGER,
+            is_alive BOOLEAN DEFAULT 1,
+            role TEXT,
+            FOREIGN KEY(faction_id) REFERENCES factions(id)
+        )
+    """)
+
+    # Diplomacy Matrix
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS faction_relations (
+            faction_a_id INTEGER,
+            faction_b_id INTEGER,
+            diplomacy_score INTEGER,
+            treaty_status TEXT,
+            UNIQUE(faction_a_id, faction_b_id),
+            FOREIGN KEY(faction_a_id) REFERENCES factions(id),
+            FOREIGN KEY(faction_b_id) REFERENCES factions(id)
+        )
+    """)
+
+    # Faction Economics
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS faction_economics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            faction_id INTEGER,
+            good_name TEXT,
+            status TEXT,
+            urgency_multiplier REAL,
+            FOREIGN KEY(faction_id) REFERENCES factions(id)
+        )
+    """)
+
     # 6. Settlements Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS settlements (

@@ -1,6 +1,9 @@
 import os
 import sqlite3
 import json
+from dotenv import load_dotenv
+
+load_dotenv()
 import urllib.request
 import urllib.error
 import time
@@ -67,7 +70,9 @@ class LordsmithAIClient:
     endpoints or Google Gemini API with mandatory exponential backoff and error handling.
     """
     @staticmethod
-    def execute_prompt(prompt, system_instruction=None, json_schema=None, api_key="AIzaSyBDGMyqemNVuawYYNRjqr-uFjqvlcFR3IY", model_name="qwen2.5:latest"):
+    def execute_prompt(prompt, system_instruction=None, json_schema=None, api_key=None, model_name="qwen2.5:latest"):
+        if api_key is None:
+            api_key = os.getenv("GEMINI_API_KEY", "")
         """
         Sends inference request to the available backend. 
         Tries local Ollama first, falling back to Google Gemini if configured or needed.
