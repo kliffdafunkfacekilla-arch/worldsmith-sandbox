@@ -16,6 +16,23 @@ def init_database():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    cursor.execute("CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(title, content, category, content=notes, content_rowid=id)")
+    cursor.execute("""
+    CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
+        INSERT INTO notes_fts(rowid, title, content, category) VALUES (new.id, new.title, new.content, new.category);
+    END;
+    """)
+    cursor.execute("""
+    CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
+        INSERT INTO notes_fts(notes_fts, rowid, title, content, category) VALUES('delete', old.id, old.title, old.content, old.category);
+    END;
+    """)
+    cursor.execute("""
+    CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
+        INSERT INTO notes_fts(notes_fts, rowid, title, content, category) VALUES('delete', old.id, old.title, old.content, old.category);
+        INSERT INTO notes_fts(rowid, title, content, category) VALUES (new.id, new.title, new.content, new.category);
+    END;
+    """)
     
     # 2. Assets/Tags Table
     cursor.execute("""

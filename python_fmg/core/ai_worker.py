@@ -3,7 +3,7 @@ import sqlite3
 import json
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 import urllib.request
 import urllib.error
 import time
@@ -69,14 +69,67 @@ class LordsmithAIClient:
     Unified communication bridge that executes requests against local Ollama 
     endpoints or Google Gemini API with mandatory exponential backoff and error handling.
     """
+    last_backend_used = "Standby"
+    
     @staticmethod
     def execute_prompt(prompt, system_instruction=None, json_schema=None, api_key=None, model_name="qwen2.5:latest"):
         if api_key is None:
             api_key = os.getenv("GEMINI_API_KEY", "")
         """
         Sends inference request to the available backend. 
-        Tries local Ollama first, falling back to Google Gemini if configured or needed.
+        PRIORITIZES Google Gemini API if configured. Falls back to local Ollama.
         """
+        def _clean_response(text):
+            if json_schema:
+                text = re.sub(r'```json|```', '', text).strip()
+            return text
+
+        if api_key:
+            # === Google Gemini API Engine ===
+            target_model = "gemini-flash-lite-latest"
+            gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={api_key}"
+            
+            contents_payload = {
+                "contents": [{
+                    "parts": [{"text": prompt}]
+                }]
+            }
+            if system_instruction:
+                contents_payload["systemInstruction"] = {
+                    "parts": [{"text": system_instruction}]
+                }
+            if json_schema:
+                contents_payload["generationConfig"] = {
+                    "responseMimeType": "application/json",
+                    "responseSchema": json_schema
+                }
+
+            backoff_delays = [2, 4, 8, 16]
+            for attempt, delay in enumerate(backoff_delays):
+                try:
+                    req = urllib.request.Request(
+                        gemini_url,
+                        data=json.dumps(contents_payload).encode("utf-8"),
+                        headers={"Content-Type": "application/json"}
+                    )
+                    with urllib.request.urlopen(req, timeout=30) as response:
+                        if response.status == 200:
+                            resp_data = json.loads(response.read().decode("utf-8"))
+                            text_resp = resp_data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                            
+                            # Add an intentional 4.5-second rate limit delay before returning 
+                            # to ensure a steady flow of data and stay under Gemini's 15 RPM free tier limit!
+                            time.sleep(4.5)
+                            LordsmithAIClient.last_backend_used = "Gemini Cloud API"
+                            return _clean_response(text_resp.strip())
+                except urllib.error.HTTPError as he:
+                    if he.code in [400, 401, 403]:
+                        break # Auth error, fallback to ollama
+                except Exception:
+                    pass
+                
+                time.sleep(delay)
+
         # Changed to 127.0.0.1 to avoid Windows IPv6 localhost resolution timeouts
         ollama_url = "http://127.0.0.1:11434/api/generate"
         ollama_payload = {
@@ -96,11 +149,6 @@ class LordsmithAIClient:
         elif system_instruction:
             ollama_payload["system"] = system_instruction
 
-        def _clean_response(text):
-            if json_schema:
-                text = re.sub(r'```json|```', '', text).strip()
-            return text
-
         try:
             req = urllib.request.Request(
                 ollama_url,
@@ -111,50 +159,11 @@ class LordsmithAIClient:
             with urllib.request.urlopen(req, timeout=300) as response:
                 if response.status == 200:
                     resp_data = json.loads(response.read().decode("utf-8"))
+                    LordsmithAIClient.last_backend_used = "Local Ollama"
                     return _clean_response(resp_data.get("response", "").strip())
         except Exception as e:
             print(f"Ollama local inference bypassed: {e}")
             pass
-
-        # === Google Gemini API Fallback Engine (gemini-2.5-flash-preview-09-2025) ===
-        target_model = "gemini-2.5-flash-preview-09-2025"
-        gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={api_key}"
-        
-        contents_payload = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }]
-        }
-        if system_instruction:
-            contents_payload["systemInstruction"] = {
-                "parts": [{"text": system_instruction}]
-            }
-        if json_schema:
-            contents_payload["generationConfig"] = {
-                "responseMimeType": "application/json",
-                "responseSchema": json_schema
-            }
-
-        backoff_delays = [1, 2, 4, 8, 16]
-        for attempt, delay in enumerate(backoff_delays):
-            try:
-                req = urllib.request.Request(
-                    gemini_url,
-                    data=json.dumps(contents_payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json"}
-                )
-                with urllib.request.urlopen(req, timeout=30) as response:
-                    if response.status == 200:
-                        resp_data = json.loads(response.read().decode("utf-8"))
-                        text_resp = resp_data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                        return _clean_response(text_resp.strip())
-            except urllib.error.HTTPError as he:
-                if he.code in [400, 401, 403]:
-                    break
-            except Exception:
-                pass
-            
-            time.sleep(delay)
 
         return "AI Ingestion Engine Error: Offline model (Ollama) and cloud APIs are currently unreachable."
 
@@ -282,78 +291,24 @@ class AILoreIngestor(QThread):
         for cat in categories:
             os.makedirs(os.path.join(self.vault_dir, cat), exist_ok=True)
 
-        dissection_schema = {
-            "type": "OBJECT",
-            "properties": {
-                "category": {
-                    "type": "STRING",
-                    "enum": ["Characters", "Factions", "Locations", "Cultures", "Religions", "General"]
-                },
-                "faction": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "name": {"type": "STRING"},
-                        "gov_type": {"type": "STRING"},
-                        "magic_stance": {"type": "STRING"},
-                        "domain_type": {"type": "STRING"}
-                    }
-                },
-                "religion": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "name": {"type": "STRING"},
-                        "religion_type": {"type": "STRING"},
-                        "supreme_deity": {"type": "STRING"}
-                    }
-                },
-                "settlement": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "name": {"type": "STRING"},
-                        "population_k": {"type": "NUMBER"}
-                    }
-                },
-                "actor": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "name": {"type": "STRING"},
-                        "faction_name": {"type": "STRING"},
-                        "role": {"type": "STRING"}
-                    }
-                },
-                "faction_economic_status": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "faction_name": {"type": "STRING"},
-                        "good_name": {"type": "STRING"},
-                        "status": {"type": "STRING", "enum": ["Surplus", "Deficit"]},
-                        "urgency_multiplier": {"type": "NUMBER"}
-                    }
-                },
-                "diplomacy_tension": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "faction_a": {"type": "STRING"},
-                        "faction_b": {"type": "STRING"},
-                        "diplomacy_score": {"type": "INTEGER"},
-                        "treaty_status": {"type": "STRING"}
-                    }
-                },
-                "atomic_facts": {
-                    "type": "ARRAY",
-                    "items": {
-                        "type": "OBJECT",
-                        "properties": {
-                            "subject": {"type": "STRING"},
-                            "relationship": {"type": "STRING"},
-                            "target": {"type": "STRING"},
-                            "context": {"type": "STRING"}
-                        }
-                    }
-                }
-            },
-            "required": ["category"]
-        }
+        system_instruction = f"""
+You are a master relational parser of {self.genre} lore.
+Extract entities and atomic facts from the text.
+Do NOT output JSON. Output only structured Markdown lists EXACTLY in this format:
+
+## Category
+[Main Category of the text, e.g. Factions, Characters, Locations, Religions, Economy, General]
+
+## Entities
+- [Faction] Name : Description
+- [Character] Name : Description
+- [Location] Name : Description
+- [Religion] Name : Description
+- [Economy] Resource Name : Description
+
+## Facts
+- Subject | Relationship | Target | Context
+"""
 
         self.ai_offline = False
 
@@ -370,7 +325,20 @@ class AILoreIngestor(QThread):
 
                 title = os.path.splitext(filename)[0]
                 
-                # CHUNKING LOGIC: Split by double newline, group into ~800 word chunks
+                # Save full text to database first for immediate searchability
+                conn = sqlite3.connect(self.db_path, timeout=15.0)
+                conn.execute("PRAGMA journal_mode=WAL;")
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO notes (title, content, category)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(title) DO UPDATE SET content=excluded.content
+                """, (title, raw_prose, "General"))
+                
+                cursor.execute("SELECT id FROM notes WHERE title=?", (title,))
+                note_id = cursor.fetchone()[0]
+
+                # Process chunks
                 paragraphs = raw_prose.split('\n\n')
                 chunks = []
                 current_chunk = []
@@ -388,112 +356,61 @@ class AILoreIngestor(QThread):
                     chunks.append('\n\n'.join(current_chunk))
 
                 final_category = "General"
-                
-                # Save full text to database first
-                conn = sqlite3.connect(self.db_path, timeout=15.0)
-                conn.execute("PRAGMA journal_mode=WAL;")
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO notes (title, content, category)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(title) DO UPDATE SET content=excluded.content, category=excluded.category
-                """, (title, raw_prose, final_category))
-                
-                cursor.execute("SELECT id FROM notes WHERE title=?", (title,))
-                note_id = cursor.fetchone()[0]
 
-                # Process each chunk
                 for c_idx, chunk_text in enumerate(chunks):
                     self.progress_update.emit(idx + 1, total_files, f"{filename} (Chunk {c_idx+1}/{len(chunks)})")
                     
-                    prompt = f"Dissect and extract worldbuilding entities from this text snippet:\n\n{chunk_text}"
+                    prompt = f"Extract worldbuilding entities from this text snippet:\n\n{chunk_text}"
                     resp = LordsmithAIClient.execute_prompt(
                         prompt,
-                        system_instruction=f"You are a master relational parser of {self.genre} lore. Output structured JSON blocks conforming to the requested schema.",
-                        json_schema=dissection_schema
+                        system_instruction=system_instruction
                     )
 
                     clean_resp = resp.strip()
                     if "AI Ingestion Engine Error" in clean_resp:
-                        self.ai_offline = True
-                        raise Exception("AI backend unreachable (No Ollama or API key).")
+                        raise Exception("AI backend unreachable for this chunk (Rate limit or timeout).")
                     
-                    dissected_data = json.loads(clean_resp)
-                    if not dissected_data:
-                        dissected_data = {}
-                    if dissected_data.get("category") and dissected_data["category"] != "General":
-                        final_category = dissected_data["category"]
-
-                    if "faction" in dissected_data and dissected_data["faction"].get("name"):
-                        f = dissected_data["faction"]
-                        cursor.execute("""
-                            INSERT INTO factions (name, color, gov_type, magic_stance, domain_type, associated_note_id)
-                            VALUES (?, '#3b82f6', ?, ?, ?, ?)
-                            ON CONFLICT(name) DO UPDATE SET gov_type=excluded.gov_type
-                        """, (f["name"], f.get("gov_type", "Empire"), f.get("magic_stance", "Regulated"), f.get("domain_type", "Both"), note_id))
-
-                    if "religion" in dissected_data and dissected_data["religion"].get("name"):
-                        r = dissected_data["religion"]
-                        cursor.execute("""
-                            INSERT INTO religions (name, color, religion_type, supreme_deity, associated_note_id)
-                            VALUES (?, '#eab308', ?, ?, ?)
-                            ON CONFLICT(name) DO UPDATE SET supreme_deity=excluded.supreme_deity
-                        """, (r["name"], r.get("religion_type", "Deity-Centric"), r.get("supreme_deity", "Solis"), note_id))
-
-                    if "settlement" in dissected_data and dissected_data["settlement"].get("name"):
-                        s = dissected_data["settlement"]
-                        cursor.execute("""
-                            INSERT INTO settlements (name, population, cell_idx, associated_note_id)
-                            VALUES (?, ?, ?, ?)
-                        """, (s["name"], s.get("population_k", 10.0), random.randint(100, 900), note_id))
-
-                    if "actor" in dissected_data and dissected_data["actor"].get("name"):
-                        a = dissected_data["actor"]
-                        # Get faction id if possible
-                        cursor.execute("SELECT id FROM factions WHERE name=?", (a.get("faction_name"),))
-                        f_row = cursor.fetchone()
-                        f_id = f_row[0] if f_row else None
-                        cursor.execute("""
-                            INSERT INTO actors (name, faction_id, current_cell_idx, is_alive, role)
-                            VALUES (?, ?, ?, 1, ?)
-                        """, (a["name"], f_id, random.randint(100, 900), a.get("role")))
-
-                    if "faction_economic_status" in dissected_data and dissected_data["faction_economic_status"].get("faction_name"):
-                        e = dissected_data["faction_economic_status"]
-                        cursor.execute("SELECT id FROM factions WHERE name=?", (e.get("faction_name"),))
-                        f_row = cursor.fetchone()
-                        f_id = f_row[0] if f_row else None
-                        if f_id:
-                            cursor.execute("""
-                                INSERT INTO faction_economics (faction_id, good_name, status, urgency_multiplier)
-                                VALUES (?, ?, ?, ?)
-                            """, (f_id, e.get("good_name"), e.get("status"), e.get("urgency_multiplier", 1.0)))
-
-                    if "diplomacy_tension" in dissected_data and dissected_data["diplomacy_tension"].get("faction_a") and dissected_data["diplomacy_tension"].get("faction_b"):
-                        d = dissected_data["diplomacy_tension"]
-                        cursor.execute("SELECT id FROM factions WHERE name=?", (d.get("faction_a"),))
-                        fa_row = cursor.fetchone()
-                        cursor.execute("SELECT id FROM factions WHERE name=?", (d.get("faction_b"),))
-                        fb_row = cursor.fetchone()
-                        if fa_row and fb_row:
-                            try:
-                                cursor.execute("""
-                                    INSERT INTO faction_relations (faction_a_id, faction_b_id, diplomacy_score, treaty_status)
-                                    VALUES (?, ?, ?, ?)
-                                """, (fa_row[0], fb_row[0], d.get("diplomacy_score", 0), d.get("treaty_status", "Neutral")))
-                            except sqlite3.IntegrityError:
-                                pass # Unique constraint failed, relation exists
-
-                    if "atomic_facts" in dissected_data and isinstance(dissected_data["atomic_facts"], list):
-                        for fact in dissected_data["atomic_facts"]:
-                            if fact.get("subject") and fact.get("relationship") and fact.get("target"):
-                                cursor.execute("""
-                                    INSERT INTO atomic_facts (subject, relationship, target, context, associated_note_id)
-                                    VALUES (?, ?, ?, ?, ?)
-                                """, (fact.get("subject"), fact.get("relationship"), fact.get("target"), fact.get("context", ""), note_id))
-
+                    # Regex parsing of the markdown output
+                    lines = clean_resp.split('\n')
+                    mode = None
+                    for line in lines:
+                        line = line.strip()
+                        if line.startswith("## Category"):
+                            mode = "category"
+                        elif line.startswith("## Entities"):
+                            mode = "entities"
+                        elif line.startswith("## Facts"):
+                            mode = "facts"
+                        elif line.startswith("-") or line.startswith("*"):
+                            line = line.lstrip("-* ").strip()
+                            if mode == "category":
+                                final_category = line
+                            elif mode == "entities":
+                                m = re.match(r"^\[(.*?)\](.*?):(.*)", line)
+                                if m:
+                                    e_type = m.group(1).strip().lower()
+                                    e_name = m.group(2).strip()
+                                    e_desc = m.group(3).strip()
+                                    if e_type == "faction":
+                                        cursor.execute("INSERT INTO factions (name, color, associated_note_id) VALUES (?, '#3b82f6', ?) ON CONFLICT(name) DO NOTHING", (e_name, note_id))
+                                    elif e_type == "character":
+                                        cursor.execute("INSERT INTO actors (name, associated_note_id) VALUES (?, ?)", (e_name, note_id))
+                                    elif e_type == "location":
+                                        cursor.execute("INSERT INTO settlements (name, associated_note_id) VALUES (?, ?)", (e_name, note_id))
+                                    elif e_type == "religion":
+                                        cursor.execute("INSERT INTO religions (name, color, associated_note_id) VALUES (?, '#eab308', ?) ON CONFLICT(name) DO NOTHING", (e_name, note_id))
+                            elif mode == "facts":
+                                parts = [p.strip() for p in line.split("|")]
+                                if len(parts) >= 3:
+                                    subject = parts[0]
+                                    rel = parts[1]
+                                    target = parts[2]
+                                    context = parts[3] if len(parts) > 3 else ""
+                                    cursor.execute("INSERT INTO atomic_facts (subject, relationship, target, context, associated_note_id) VALUES (?, ?, ?, ?, ?)", (subject, rel, target, context, note_id))
+                                    
                 cursor.execute("UPDATE notes SET category=? WHERE id=?", (final_category, note_id))
                 conn.commit()
+
                 conn.close()
 
                 dest_path = os.path.join(self.vault_dir, final_category, filename)

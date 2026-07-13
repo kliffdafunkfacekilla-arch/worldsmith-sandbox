@@ -39,6 +39,23 @@ def setup_master_knowledge_db(db_path):
         cursor.execute("PRAGMA foreign_keys = ON;")
         
         cursor.execute("CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT UNIQUE NOT NULL, content TEXT NOT NULL, category TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+        cursor.execute("CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(title, content, category, content=notes, content_rowid=id)")
+        cursor.execute("""
+        CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
+          INSERT INTO notes_fts(rowid, title, content, category) VALUES (new.id, new.title, new.content, new.category);
+        END;
+        """)
+        cursor.execute("""
+        CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
+          INSERT INTO notes_fts(notes_fts, rowid, title, content, category) VALUES('delete', old.id, old.title, old.content, old.category);
+        END;
+        """)
+        cursor.execute("""
+        CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
+          INSERT INTO notes_fts(notes_fts, rowid, title, content, category) VALUES('delete', old.id, old.title, old.content, old.category);
+          INSERT INTO notes_fts(rowid, title, content, category) VALUES (new.id, new.title, new.content, new.category);
+        END;
+        """)
         cursor.execute("CREATE TABLE IF NOT EXISTS factions (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, color TEXT NOT NULL, gov_type TEXT DEFAULT 'Feudal Monarchy', dominant_cultures TEXT, dominant_religions TEXT, aggression_scale INTEGER DEFAULT 5, trade_scale INTEGER DEFAULT 5, explore_scale INTEGER DEFAULT 5, espionage_scale INTEGER DEFAULT 5, morale INTEGER DEFAULT 5, crime INTEGER DEFAULT 5, poverty INTEGER DEFAULT 5, freedom INTEGER DEFAULT 5, magic_stance TEXT DEFAULT 'Regulated', domain_type TEXT DEFAULT 'Both', treasury REAL DEFAULT 1000.0, capital_cell INTEGER, associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
         cursor.execute("CREATE TABLE IF NOT EXISTS provinces (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, color TEXT NOT NULL, state_id INTEGER NOT NULL, governor_name TEXT, tax_rate REAL DEFAULT 10.0, local_morale INTEGER DEFAULT 5, local_crime INTEGER DEFAULT 5, local_poverty INTEGER DEFAULT 5, local_freedom INTEGER DEFAULT 5, local_magic_handling TEXT DEFAULT 'Lax Enforcement', associated_note_id INTEGER, FOREIGN KEY(state_id) REFERENCES factions(id) ON DELETE CASCADE, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
         cursor.execute("CREATE TABLE IF NOT EXISTS cultures (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, code TEXT NOT NULL, language_base TEXT DEFAULT 'Imperial', trait_type TEXT DEFAULT 'None', trait_modifier REAL DEFAULT 1.0, domain_type TEXT DEFAULT 'Both', associated_note_id INTEGER, FOREIGN KEY(associated_note_id) REFERENCES notes(id) ON DELETE SET NULL)")
@@ -647,6 +664,18 @@ class LordsmithStudioMainWindow(QMainWindow):
         
         # Display boot status message for AI engine
         self.statusBar().showMessage("Initializing Workspace...")
+        
+        # Add permanent AI Status indicator
+        from PyQt6.QtWidgets import QLabel
+        self.ai_status_label = QLabel("AI Engine: Standby")
+        self.ai_status_label.setStyleSheet("color: #3b82f6; font-weight: bold; margin-right: 20px;")
+        self.statusBar().addPermanentWidget(self.ai_status_label)
+        
+        # Add a QTimer to poll the last backend used so the UI always reflects reality
+        from PyQt6.QtCore import QTimer
+        self.ai_status_timer = QTimer(self)
+        self.ai_status_timer.timeout.connect(self.poll_ai_backend_status)
+        self.ai_status_timer.start(1000) # Update every second
 
         self.db_path = os.path.join(self.project_dir, "lore_forge_world.db")
         setup_master_knowledge_db(self.db_path)
@@ -819,6 +848,13 @@ class LordsmithStudioMainWindow(QMainWindow):
         self.ai_bootstrapper.boot_complete.connect(self.on_ai_boot_complete)
         self.ai_bootstrapper.start()
 
+    def poll_ai_backend_status(self):
+        try:
+            from python_fmg.core.ai_worker import LordsmithAIClient
+            self.ai_status_label.setText(f"Active AI Brain: {LordsmithAIClient.last_backend_used}")
+        except:
+            pass
+
     def on_ai_boot_complete(self, success, message):
         """Callback when the AI finishes loading the model into memory."""
         self.statusBar().showMessage(message)
@@ -928,9 +964,9 @@ class LordsmithStudioMainWindow(QMainWindow):
         self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self.progress_dialog.setStyleSheet("background-color: #0c0c10; color: #fff;")
         
+        from python_fmg.core.ai_worker import LordsmithAIClient
         self.ingestor.progress_update.connect(lambda cur, tot, name: self.progress_dialog.setValue(cur))
-        # Updated text to communicate that inference on local CPUs is quite slow!
-        self.ingestor.progress_update.connect(lambda cur, tot, name: self.progress_dialog.setLabelText(f"Parsing: {name}\n(Please wait, local AI may take 1-3 mins per file on CPU...)"))
+        self.ingestor.progress_update.connect(lambda cur, tot, name: self.progress_dialog.setLabelText(f"Parsing: {name}\nActive Brain: {LordsmithAIClient.last_backend_used}"))
         self.ingestor.ingestion_complete.connect(self.on_ingestion_complete)
         
         self.progress_dialog.show()
