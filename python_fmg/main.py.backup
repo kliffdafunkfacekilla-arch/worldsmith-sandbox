@@ -588,44 +588,19 @@ class ProjectStartupWizard(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.selected_dir = None
-        self.import_notes = False
         self.setWindowTitle("Lordsmith Studio Startup")
-        self.resize(460, 280)
-        self.setStyleSheet("background-color: #111116; color: #EEEEF8; font-family: Arial; QPushButton { padding: 8px; margin: 4px; }")
+        self.resize(460, 240)
+        self.setStyleSheet("background-color: #111116; color: #EEEEF8; font-family: Arial;")
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("<h2>🌌 Welcome to Lordsmith Studio</h2>"))
-        
-        btn_open = QPushButton("📂 Open Existing Project")
-        btn_open.clicked.connect(self.action_open_project)
-        layout.addWidget(btn_open)
-
-        btn_import = QPushButton("📥 Start New by Importing Notes")
-        btn_import.clicked.connect(self.action_import_new)
-        layout.addWidget(btn_import)
-        
-        btn_new = QPushButton("📄 Start Blank Project")
+        btn_new = QPushButton("🎲 Create Fresh Workspace")
         btn_new.clicked.connect(self.action_new_project)
         layout.addWidget(btn_new)
 
-    def action_open_project(self):
-        dir_path = QFileDialog.getExistingDirectory(self, "Select Existing Project Directory")
-        if dir_path:
-            self.selected_dir = dir_path
-            self.import_notes = False
-            self.accept()
-            
-    def action_import_new(self):
-        dir_path = QFileDialog.getExistingDirectory(self, "Select Directory for New Project")
-        if dir_path:
-            self.selected_dir = dir_path
-            self.import_notes = True
-            self.accept()
-
     def action_new_project(self):
-        dir_path = QFileDialog.getExistingDirectory(self, "Select Directory for New Project")
+        dir_path = QFileDialog.getExistingDirectory(self, "Select Project Folder Directory")
         if dir_path:
             self.selected_dir = dir_path
-            self.import_notes = False
             self.accept()
 
 # =============================================================================
@@ -668,65 +643,14 @@ class LordsmithStudioMainWindow(QMainWindow):
         self.panels_splitter = QSplitter(Qt.Orientation.Horizontal)
         main_h_layout.addWidget(self.panels_splitter)
 
-        # Left panel: Tabbed Interface for Editor, Vault, and AI
+        # Left panel: Note editor
         self.panel_left = QWidget()
         pl_lay = QVBoxLayout(self.panel_left)
-        
-        self.left_tabs = QTabWidget()
-        self.left_tabs.setStyleSheet("QTabBar::tab { background: #111116; color: #EEEEF8; padding: 8px; border: 1px solid #333; } QTabBar::tab:selected { background: #29293a; font-weight: bold; }")
-        
-        # TAB 1: Editor
-        self.tab_editor = QWidget()
-        tab_ed_lay = QVBoxLayout(self.tab_editor)
-        tab_ed_lay.addWidget(QLabel("<b>✍️ Narrative Lore Writer</b>"))
-        self.note_writer = MarkdownNotebookEditor(self.tab_editor)
-        tab_ed_lay.addWidget(self.note_writer, 1)
+        pl_lay.addWidget(QLabel("<b>✍️ Narrative Lore Writer</b>"))
+        self.note_writer = MarkdownNotebookEditor(self.panel_left)
+        pl_lay.addWidget(self.note_writer, 1)
         self.note_writer.spatial_bind_clicked.connect(self.handle_spatial_bind_clicked)
         self.note_writer.wiki_link_clicked.connect(self.handle_wiki_link_clicked)
-        self.left_tabs.addTab(self.tab_editor, "📝 Lore Editor")
-        
-        # TAB 2: Vault
-        self.tab_vault = QWidget()
-        tab_vault_lay = QVBoxLayout(self.tab_vault)
-        tab_vault_lay.addWidget(QLabel("<b>📂 Extracted Lore Vault</b>"))
-        self.vault_tree = QTreeView()
-        self.vault_model = QFileSystemModel()
-        vault_path = os.path.join(self.project_dir, 'lore_vault')
-        os.makedirs(vault_path, exist_ok=True)
-        self.vault_model.setRootPath(vault_path)
-        self.vault_tree.setModel(self.vault_model)
-        self.vault_tree.setRootIndex(self.vault_model.index(vault_path))
-        self.vault_tree.setColumnWidth(0, 250)
-        self.vault_tree.hideColumn(1)
-        self.vault_tree.hideColumn(2)
-        self.vault_tree.hideColumn(3)
-        self.vault_tree.clicked.connect(self.handle_vault_item_clicked)
-        tab_vault_lay.addWidget(self.vault_tree, 1)
-        self.left_tabs.addTab(self.tab_vault, "📂 Notes Vault")
-        
-        # TAB 3: AI Chat
-        self.tab_chat = QWidget()
-        tab_chat_lay = QVBoxLayout(self.tab_chat)
-        tab_chat_lay.addWidget(QLabel("<b>🤖 Lordsmith AI Assistant</b>"))
-        
-        self.ai_prompt_history = QTextEdit()
-        self.ai_prompt_history.setReadOnly(True)
-        self.ai_prompt_history.setStyleSheet("background-color: #0c0c10; border: none; font-size: 14px;")
-        tab_chat_lay.addWidget(self.ai_prompt_history, 1)
-        
-        chat_input_lay = QHBoxLayout()
-        self.ai_input = QLineEdit()
-        self.ai_input.setPlaceholderText("Ask the AI about your lore, request ideas, or expand notes...")
-        self.ai_input.returnPressed.connect(self.handle_ai_submit)
-        chat_input_lay.addWidget(self.ai_input, 1)
-        
-        btn_ai_send = QPushButton("Send")
-        btn_ai_send.clicked.connect(self.handle_ai_submit)
-        chat_input_lay.addWidget(btn_ai_send)
-        tab_chat_lay.addLayout(chat_input_lay)
-        self.left_tabs.addTab(self.tab_chat, "🤖 AI Chat")
-        
-        pl_lay.addWidget(self.left_tabs, 1)
         self.panels_splitter.addWidget(self.panel_left)
 
         # Middle panel: Subsystem Registry Stack
@@ -911,12 +835,9 @@ class LordsmithStudioMainWindow(QMainWindow):
         self.progress_dialog.show()
         self.ingestor.start()
 
-    def on_ingestion_complete(self, is_online):
+    def on_ingestion_complete(self):
         self.progress_dialog.setValue(self.progress_dialog.maximum())
-        if is_online:
-            QMessageBox.information(self, "Success", "Lore successfully ingested and synchronized with SQLite database!")
-        else:
-            QMessageBox.warning(self, "Offline Mode", "Lore was saved as plain text, but AI Entity Extraction failed! No Ollama instance was found on port 11434 and no Gemini API key was provided.")
+        QMessageBox.information(self, "Success", "Lore successfully ingested and synchronized with SQLite database!")
         self.w_factions.refresh_grid()
         self.w_provinces.refresh_grid()
         # Trigger map canvas re-render since new cities might have spawned
@@ -959,51 +880,10 @@ class LordsmithStudioMainWindow(QMainWindow):
         except Exception as e:
             print(f"Error fetching note: {e}")
 
-    def handle_vault_item_clicked(self, index):
-        if not self.vault_model.isDir(index):
-            file_path = self.vault_model.filePath(index)
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                self.note_writer.setText(content)
-                self.left_tabs.setCurrentIndex(0) # switch to editor tab
-            except Exception as e:
-                QMessageBox.critical(self, "Error reading file", str(e))
-
-    def handle_ai_submit(self):
-        user_text = self.ai_input.text().strip()
-        if not user_text:
-            return
-            
-        self.ai_input.clear()
-        
-        self.ai_prompt_history.append(
-            f'<div style="text-align: right; margin: 2px 4px 6px 30px;">'
-            f'<span style="background-color: #3b82f6; color: white; padding: 4px 8px; border-radius: 6px; display: inline-block;">'
-            f'<b>You:</b> {user_text}</span></div>'
-        )
-        
-        system_instr = "You are Lordsmith AI, a master cartographer and chronicler of Fantasy worlds. You help users expand their worldbuilding notes and answer questions about their generated content."
-        
-        genre = "Fantasy"
-        self.ai_worker = OllamaPromptWorker(user_text, db_path=self.db_path, genre=genre)
-        self.ai_worker.response_received.connect(self.handle_ai_response)
-        self.ai_worker.start()
-
-    def handle_ai_response(self, text):
-        self.ai_prompt_history.append(
-            f'<div style="text-align: left; margin: 2px 30px 6px 4px;">'
-            f'<span style="background-color: #29293a; color: #EEEEF8; padding: 4px 8px; border-radius: 6px; display: inline-block;">'
-            f'<span style="color: #04D361; font-weight: bold;">AI:</span> {text}</span></div>'
-        )
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     wizard = ProjectStartupWizard()
     if wizard.exec() == QDialog.DialogCode.Accepted and wizard.selected_dir:
         window = LordsmithStudioMainWindow(wizard.selected_dir)
         window.show()
-        if wizard.import_notes:
-            # use QTimer to trigger import dialogue shortly after UI shows
-            QTimer.singleShot(500, window.action_import_lore)
         sys.exit(app.exec())

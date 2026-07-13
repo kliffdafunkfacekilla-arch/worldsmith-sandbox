@@ -37,9 +37,12 @@ handler_code = '''
         self.progress_dialog.show()
         self.ingestor.start()
 
-    def on_ingestion_complete(self):
+    def on_ingestion_complete(self, is_online):
         self.progress_dialog.setValue(self.progress_dialog.maximum())
-        QMessageBox.information(self, "Success", "Lore successfully ingested and synchronized with SQLite database!")
+        if is_online:
+            QMessageBox.information(self, "Success", "Lore successfully ingested and synchronized with SQLite database!")
+        else:
+            QMessageBox.warning(self, "Offline Mode", "Lore was saved as plain text, but AI Entity Extraction failed! No Ollama instance was found on port 11434 and no Gemini API key was provided.")
         self.w_factions.refresh_grid()
         self.w_provinces.refresh_grid()
         # Trigger map canvas re-render since new cities might have spawned
