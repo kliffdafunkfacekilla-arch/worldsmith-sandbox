@@ -191,6 +191,8 @@ class LoreAuditWorker(QThread):
             # Parse returned results safely
             try:
                 clean_resp = resp.strip()
+                if "AI Ingestion Engine Error" in clean_resp:
+                    raise Exception("Auditor offline")
                 anomalies = json.loads(clean_resp)
             except Exception:
                 # Fallback simple line parsing if JSON parsing fails
@@ -283,6 +285,9 @@ class AILoreIngestor(QThread):
 
                 # Process raw reply
                 clean_resp = resp.strip()
+                if "AI Ingestion Engine Error" in clean_resp:
+                    raise Exception("AI backend unreachable (No Ollama or API key).")
+                
                 dissected_data = json.loads(clean_resp)
                 category = dissected_data.get("category", "General")
 
@@ -295,7 +300,18 @@ class AILoreIngestor(QThread):
                     dest_f.write(raw_prose)
 
             except Exception as e:
-                print(f"Skipping file {filename} due to parser exception: {e}")
+                print(f"Skipping JSON entity extraction for {filename}: {e}")
+                
+                # Fallback: We still want to add the Note to SQLite and move it to the General vault
+                try:
+                    category = "General"
+                    self.commit_dissected_nodes(file_path, category, {}, raw_prose)
+                    dest_path = os.path.join(self.vault_dir, category, filename)
+                    with open(dest_path, "w", encoding="utf-8") as dest_f:
+                        dest_f.write(raw_prose)
+                    print(f"-> Successfully saved {filename} as a raw offline note instead.")
+                except Exception as ex2:
+                    print(f"-> Critical failure saving raw note {filename}: {ex2}")
 
             # Safe pacing sleep to allow progress bars to paint smoothly
             self.msleep(100)

@@ -4,6 +4,7 @@ import sqlite3
 import json
 import random
 import math
+import subprocess
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
@@ -632,6 +633,9 @@ class LordsmithStudioMainWindow(QMainWindow):
         action_import_lore = file_menu.addAction("📥 Import Markdown Vault (.md)")
         action_import_lore.triggered.connect(self.action_import_lore)
 
+        action_start_ai = file_menu.addAction("🚀 Boot Local AI Server (Ollama)")
+        action_start_ai.triggered.connect(self.action_start_ollama)
+
         central_container = QWidget()
 
         self.setCentralWidget(central_container)
@@ -802,6 +806,17 @@ class LordsmithStudioMainWindow(QMainWindow):
                 QMessageBox.information(self, "Export Complete", f"GeoJSON exported to: {out_path}")
             except Exception as e:
                 QMessageBox.critical(self, "Export Error", f"Failed to export GeoJSON: {e}")
+
+
+    def action_start_ollama(self):
+        try:
+            # We run it in a detached process so it doesn't block
+            subprocess.Popen(["ollama", "serve"], creationflags=subprocess.CREATE_NEW_CONSOLE)
+            QMessageBox.information(self, "AI Boot sequence", "Ollama AI server has been launched in the background.")
+        except FileNotFoundError:
+            QMessageBox.critical(self, "AI Boot Error", "Could not find 'ollama' in your system PATH. Please ensure Ollama is installed.")
+        except Exception as e:
+            QMessageBox.critical(self, "AI Boot Error", f"Failed to start Ollama: {e}")
 
 
     def action_import_lore(self):
