@@ -384,7 +384,15 @@ Do NOT output JSON. Output only structured Markdown lists EXACTLY in this format
                         elif line.startswith("-") or line.startswith("*"):
                             line = line.lstrip("-* ").strip()
                             if mode == "category":
-                                final_category = line
+                                valid_categories = ["Characters", "Factions", "Locations", "Cultures", "Religions", "General"]
+                                found = False
+                                for vc in valid_categories:
+                                    if vc.lower() in line.lower():
+                                        final_category = vc
+                                        found = True
+                                        break
+                                if not found:
+                                    final_category = "General"
                             elif mode == "entities":
                                 m = re.match(r"^\[(.*?)\](.*?):(.*)", line)
                                 if m:
