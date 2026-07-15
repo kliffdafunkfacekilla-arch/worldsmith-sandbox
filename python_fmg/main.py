@@ -956,17 +956,16 @@ class LordsmithStudioMainWindow(QMainWindow):
             QMessageBox.warning(self, "No Files Found", "No markdown (.md) or text (.txt) files were found in the selected directory.")
             return
             
-        vault_dir = os.path.join(self.project_dir, 'lore_vault')
-        self.ingestor = AILoreIngestor(file_paths, self.db_path, vault_dir, parent=self)
+        from python_fmg.core.hybrid_worker import HybridPipelineWorker
+        self.ingestor = HybridPipelineWorker(parent=self)
         
         self.progress_dialog = QProgressDialog("Ingesting Lore and Extracting Entities...", "Cancel", 0, len(file_paths), self)
         self.progress_dialog.setWindowTitle("AI Ingestion Engine")
         self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self.progress_dialog.setStyleSheet("background-color: #0c0c10; color: #fff;")
         
-        from python_fmg.core.ai_worker import LordsmithAIClient
         self.ingestor.progress_update.connect(lambda cur, tot, name: self.progress_dialog.setValue(cur))
-        self.ingestor.progress_update.connect(lambda cur, tot, name: self.progress_dialog.setLabelText(f"Parsing: {name}\nActive Brain: {LordsmithAIClient.last_backend_used}"))
+        self.ingestor.progress_update.connect(lambda cur, tot, name: self.progress_dialog.setLabelText(f"Parsing: {name}\nActive Brain: Hybrid Pipeline (Local Ollama)"))
         self.ingestor.ingestion_complete.connect(self.on_ingestion_complete)
         
         self.progress_dialog.show()

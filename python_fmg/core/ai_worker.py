@@ -85,7 +85,8 @@ class LordsmithAIClient:
                 text = re.sub(r'```json|```', '', text).strip()
             return text
 
-        if api_key and not LordsmithAIClient.api_exhausted:
+        # CLOUD APIS DISABLED PER USER INSTRUCTION
+        if False:
             # === Google Gemini API Engine ===
             target_model = "gemini-flash-lite-latest"
             gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={api_key}"
