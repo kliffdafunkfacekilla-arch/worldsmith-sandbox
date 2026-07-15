@@ -79,7 +79,8 @@ def init_database():
             status TEXT,
             color TEXT,
             treasury REAL,
-            tech_level INTEGER
+            tech_level INTEGER,
+            associated_note_id INTEGER
         )
     """)
 
