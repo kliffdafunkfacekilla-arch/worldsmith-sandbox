@@ -65,7 +65,6 @@ class AIBootstrapperWorker(QThread):
 
 
 class LordsmithAIClient:
-    api_exhausted = False
     """
     Unified communication bridge that executes requests against local Ollama 
     endpoints or Google Gemini API with mandatory exponential backoff and error handling.
@@ -85,7 +84,7 @@ class LordsmithAIClient:
                 text = re.sub(r'```json|```', '', text).strip()
             return text
 
-        if api_key and not LordsmithAIClient.api_exhausted:
+        if api_key:
             # === Google Gemini API Engine ===
             target_model = "gemini-flash-lite-latest"
             gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={api_key}"
@@ -126,10 +125,6 @@ class LordsmithAIClient:
                 except urllib.error.HTTPError as he:
                     if he.code in [400, 401, 403]:
                         break # Auth error, fallback to ollama
-                    if he.code == 429:
-                        print("Gemini API quota exceeded. Falling back to local Ollama.")
-                        LordsmithAIClient.api_exhausted = True
-                        break # Skip remaining retries immediately
                 except Exception:
                     pass
                 

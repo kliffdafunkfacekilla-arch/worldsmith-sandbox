@@ -3,8 +3,6 @@ import random
 import sqlite3
 import json
 from PyQt6.QtGui import QImage, qRed
-import numpy as np
-from scipy.spatial import Voronoi
 
 # =============================================================================
 # COSMOS COSMOLOGY REGULATOR
@@ -35,36 +33,39 @@ class AzgaarEngine:
         self.size = 1000  # Number of grid points
 
     def generate_voronoi_mesh(self, num_cells=1000):
+        """
+        Generates an organic, Poisson-jittered coordinate grid.
+        Avoids C-based Scipy/Numpy dependencies to ensure guaranteed pure-Python execution.
+        """
         self.size = num_cells
         self.cells = []
-        
+        # Generate jittered coordinate array (symmetrical relaxation approximation)
         cols_rows = int(math.sqrt(self.size))
         spacing = 1000.0 / cols_rows
-        
-        points = []
+
         cell_id = 0
-        
         for r in range(cols_rows):
             for c in range(cols_rows):
+                # Add random organic jitter to break uniform grid lines
                 jx = random.uniform(-spacing * 0.4, spacing * 0.4)
                 jy = random.uniform(-spacing * 0.4, spacing * 0.4)
                 
-                cx = max(10, min((c * spacing) + (spacing / 2.0) + jx, 990))
-                cy = max(10, min((r * spacing) + (spacing / 2.0) + jy, 990))
+                cx = (c * spacing) + (spacing / 2.0) + jx
+                cy = (r * spacing) + (spacing / 2.0) + jy
                 
-                points.append([cx, cy])
-                
+                # Symmetrical safety bounds
+                cx = max(10, min(cx, 990))
+                cy = max(10, min(cy, 990))
+
                 self.cells.append({
                     "i": cell_id,
-                    "centroid_x": cx, 
+                    "centroid_x": cx,
                     "centroid_y": cy,
-                    "x": cx,  # Added so MapViewer can read it
-                    "y": cy,  # Added so MapViewer can read it
-                    "h": 20,
-                    "temp": 15,
-                    "prec": 10,
+                    "h": 20,          # Default elevation coastline threshold
+                    "temp": 15,       # Baseline celsius
+                    "prec": 10,       # Baseline moisture/nutrients
                     "biome": "Marine",
-                    "state": 0,
+                    "state": 0,       # Unclaimed neutral territory
                     "province": 0,
                     "culture": 0,
                     "religion": 0,
@@ -75,16 +76,20 @@ class AzgaarEngine:
                 })
                 cell_id += 1
 
-        # Build the actual Voronoi mesh that MapViewer needs
-        self.vor_mesh = Voronoi(points)
-        
-        # Extract neighbors from the Voronoi ridge points
-        for point_pair in self.vor_mesh.ridge_points:
-            p1, p2 = point_pair[0], point_pair[1]
-            if p2 not in self.cells[p1]["neighbors"]:
-                self.cells[p1]["neighbors"].append(int(p2))
-            if p1 not in self.cells[p2]["neighbors"]:
-                self.cells[p2]["neighbors"].append(int(p1))
+        # Build pure-Python Delaunay adjacency graphs using k-nearest centroids
+        for cell in self.cells:
+            cx, cy = cell["centroid_x"], cell["centroid_y"]
+            distances = []
+            for target in self.cells:
+                if target["i"] == cell["i"]:
+                    continue
+                tx, ty = target["centroid_x"], target["centroid_y"]
+                dist = math.sqrt((cx - tx)**2 + (cy - ty)**2)
+                distances.append((dist, target["i"]))
+            
+            # Sort and pick the 6 nearest cells as natural Voronoi neighbors
+            distances.sort()
+            cell["neighbors"] = [idx for _, idx in distances[:6]]
 
     def run_heightmap_pipeline(self, image_path=None, custom_mask_heights=None):
         """

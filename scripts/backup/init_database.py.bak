@@ -73,10 +73,8 @@ def init_database():
     # 5. Factions / Sovereign States Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS factions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            description TEXT,
-            status TEXT,
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
             color TEXT,
             treasury REAL,
             tech_level INTEGER
@@ -87,13 +85,11 @@ def init_database():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS actors (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
             faction_id INTEGER,
             current_cell_idx INTEGER,
             is_alive BOOLEAN DEFAULT 1,
             role TEXT,
-            historical_note TEXT,
-            school_affinity TEXT,
             FOREIGN KEY(faction_id) REFERENCES factions(id)
         )
     """)
@@ -139,16 +135,10 @@ def init_database():
     # 7. The Unbound Magic Layers Map (Using Plural name for consistency)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS magic_layers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE,
-            cell_idx INTEGER,
-            magic_type TEXT,          -- 'Wild Magic', 'Abyssal Corruption', etc.
+            cell_idx INTEGER PRIMARY KEY,
+            magic_type TEXT NOT NULL,          -- 'Wild Magic', 'Abyssal Corruption', etc.
             ley_line_density REAL DEFAULT 0.0, -- Power metric scale
             flux_frequency REAL DEFAULT 1.0,   -- Interacts with calendar changes
-            mode_type TEXT,
-            element TEXT,
-            effect_field_description TEXT,
-            original_magistar TEXT,
             FOREIGN KEY(cell_idx) REFERENCES cells(id) ON DELETE CASCADE
         )
     """)

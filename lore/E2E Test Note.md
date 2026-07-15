@@ -1,1 +1,0 @@
-This is an end-to-end test note to verify the database.
